@@ -8,9 +8,15 @@ ODDS_API_KEY = os.getenv("ODDS_API_KEY")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
-# Apuestas
-SPORTS = ["soccer_spain_la_liga", "soccer_epl"]
+# Deportes activos
+SPORTS_FOOTBALL = ["soccer_spain_la_liga", "soccer_epl"]
+SPORTS_TENNIS = ["tennis_atp_barcelona_open", "tennis_atp_munich", "tennis_wta_stuttgart_open"]
+SPORTS = SPORTS_FOOTBALL + SPORTS_TENNIS
+
+# Casas
 BOOKMAKERS = ["pinnacle", "betfair", "bet365", "unibet"]
+
+# Valor
 MIN_EV_THRESHOLD = 0.03
 KELLY_FRACTION = 0.25
 MAX_STAKE_EUR = 50
