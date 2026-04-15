@@ -9,7 +9,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
 # Apuestas
-SPORTS = ["soccer_spain_la_liga", "soccer_england_premier_league"]
+SPORTS = ["soccer_spain_la_liga", "soccer_epl"]
 BOOKMAKERS = ["pinnacle", "betfair", "bet365", "unibet"]
 MIN_EV_THRESHOLD = 0.03
 KELLY_FRACTION = 0.25
