@@ -14,7 +14,7 @@ import pandas as pd
 from loguru import logger
 
 from src.data.tennis_data import (
-    _download_matches, calculate_player_stats,
+    _download_matches, download_tml_atp, calculate_player_stats,
     BASE_URL_ATP, BASE_URL_WTA,
 )
 from src.models.tennis_engine import prob_win_match, prob_win_by_ranking
@@ -214,8 +214,75 @@ def _simulate_roi(df: pd.DataFrame):
     logger.info(f"    ⚠️  Nota: ROI inflado (siempre apostamos al ganador real)")
 
 
+# ── backtest ATP 2025 (TML-Database) ─────────────────────────────────────────
+
+def backtest_atp_2025():
+    """
+    Backtest adicional usando TML-Database para 2025.
+    Train: JeffSackmann 2022-2024   Test: TML-Database 2025
+    """
+    logger.info(f"\n{'='*55}")
+    logger.info(f"  BACKTEST ATP — train 2022-24 / test 2025 (TML-Database)")
+    logger.info(f"{'='*55}")
+
+    train_df = _download_matches(BASE_URL_ATP, "atp", [2022, 2023, 2024])
+    test_df  = download_tml_atp([2025])
+
+    if train_df.empty or test_df.empty:
+        logger.error("Sin datos suficientes para backtest 2025")
+        return
+
+    serve_stats = {s: calculate_player_stats(train_df, surface=s) for s in SURFACES}
+
+    needed = ["winner_name", "loser_name", "surface", "winner_rank", "loser_rank"]
+    test_df = test_df.dropna(subset=needed)
+    test_df = test_df[test_df["winner_rank"].astype(float) > 0]
+    test_df = test_df[test_df["loser_rank"].astype(float) > 0]
+
+    if test_df.empty:
+        logger.error("Sin filas válidas en test 2025")
+        return
+
+    logger.info(f"  {len(test_df)} partidos de test 2025 con ranking disponible")
+
+    records = []
+    for _, row in test_df.iterrows():
+        p1   = row["winner_name"]
+        p2   = row["loser_name"]
+        surf = _surface_key(row["surface"])
+        if surf not in serve_stats:
+            continue
+
+        stats = serve_stats[surf]
+        serve_p1 = _get_serve(p1, stats, DEFAULT_SERVE_ATP)
+        serve_p2 = _get_serve(p2, stats, DEFAULT_SERVE_ATP)
+
+        pts_p1 = _rank_to_pts(row["winner_rank"])
+        pts_p2 = _rank_to_pts(row["loser_rank"])
+
+        prob_serve = prob_win_match(serve_p1, serve_p2)
+        prob_rank  = prob_win_by_ranking(pts_p1, pts_p2)
+
+        w_total = SERVE_WEIGHT + RANK_WEIGHT
+        prob_model    = (SERVE_WEIGHT * prob_serve + RANK_WEIGHT * prob_rank) / w_total
+        prob_baseline = prob_rank
+
+        records.append({
+            "surface":       surf,
+            "prob_model":    round(prob_model,    4),
+            "prob_baseline": round(prob_baseline, 4),
+            "prob_serve":    round(prob_serve,    4),
+        })
+
+    df = pd.DataFrame(records)
+    _print_metrics(df, "ATP 2025")
+    _simulate_roi(df)
+    return df
+
+
 # ── main ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     backtest_tour(BASE_URL_ATP, "atp", DEFAULT_SERVE_ATP)
     backtest_tour(BASE_URL_WTA, "wta", DEFAULT_SERVE_WTA)
+    backtest_atp_2025()

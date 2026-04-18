@@ -10,7 +10,10 @@ BASE_URL_ATP = "https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master
 BASE_URL_WTA = "https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master"
 BASE_URL = BASE_URL_ATP  # compatibilidad
 
-YEARS = [2022, 2023, 2024]  # 2025+ aún no disponible en JeffSackmann
+# TML-Database: ATP 2025-2026 (actualizado diariamente)
+BASE_URL_TML = "https://raw.githubusercontent.com/Tennismylife/TML-Database/master"
+
+YEARS = [2022, 2023, 2024]  # 2025+ para ATP se descarga de TML-Database
 
 SURFACE_MAP = {
     "Hard": "hard",
@@ -44,14 +47,71 @@ def _download_matches(base_url: str, prefix: str, years: list) -> pd.DataFrame:
     return full
 
 
-def download_atp_matches(years: list = YEARS) -> pd.DataFrame:
-    key = f"atp_matches_{years[0]}_{years[-1]}"
+def _download_tml(years: list) -> pd.DataFrame:
+    """
+    Descarga partidos ATP de TML-Database (2025+).
+    Mismo formato que JeffSackmann.
+    """
+    dfs = []
+    for year in years:
+        url = f"{BASE_URL_TML}/{year}.csv"
+        logger.info(f"Descargando TML-Database ATP {year}...")
+        try:
+            response = requests.get(url, timeout=15)
+            if response.status_code == 200:
+                df = pd.read_csv(StringIO(response.text))
+                dfs.append(df)
+                logger.info(f"  {len(df)} partidos descargados (TML {year})")
+            else:
+                logger.warning(f"  Error {response.status_code} para TML {year}")
+        except Exception as e:
+            logger.error(f"  Fallo descargando TML {year}: {e}")
+    if not dfs:
+        return pd.DataFrame()
+    full = pd.concat(dfs, ignore_index=True)
+    logger.info(f"TML-Database: {len(full)} partidos ATP ({years[0]}-{years[-1]})")
+    return full
+
+
+def download_atp_matches(years: list = YEARS, include_recent: bool = True) -> pd.DataFrame:
+    """
+    Descarga partidos ATP.
+    - JeffSackmann para 2022-2024
+    - TML-Database para 2025-2026 (si include_recent=True)
+    """
+    recent_years = [y for y in [2025, 2026] if y not in years]
+    key = f"atp_matches_{years[0]}_{years[-1]}{'_recent' if include_recent and recent_years else ''}"
     cached = cache.load(key)
     if cached is not None:
         return cached
+
     df = _download_matches(BASE_URL_ATP, "atp", years)
+
+    if include_recent and recent_years:
+        tml_df = _download_tml(recent_years)
+        if not tml_df.empty:
+            df = pd.concat([df, tml_df], ignore_index=True) if not df.empty else tml_df
+            logger.info(f"ATP total con TML-Database: {len(df)} partidos")
+
     if not df.empty:
-        cache.save(key, df, ttl_hours=12)
+        cache.save(key, df, ttl_hours=4)
+    return df
+
+
+def download_tml_atp(years: list = None) -> pd.DataFrame:
+    """
+    Descarga sólo datos TML-Database para los años indicados (defecto: 2025, 2026).
+    TTL corto (2h) para obtener datos del día.
+    """
+    if years is None:
+        years = [2025, 2026]
+    key = f"tml_atp_{'_'.join(str(y) for y in years)}"
+    cached = cache.load(key)
+    if cached is not None:
+        return cached
+    df = _download_tml(years)
+    if not df.empty:
+        cache.save(key, df, ttl_hours=2)
     return df
 
 
