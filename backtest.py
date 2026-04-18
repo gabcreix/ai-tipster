@@ -136,21 +136,27 @@ def _print_metrics(df: pd.DataFrame, label: str):
         acc = (s["prob_model"] > 0.5).mean()
         logger.info(f"    {surf:6s}: {acc:.1%}  ({len(s)} partidos)")
 
-    # Calibración por bucket
+    # Calibración correcta: crear pares (prob_predicha, outcome) para AMBOS jugadores
+    # p1 = ganador real (outcome=1), p2 = perdedor (outcome=0)
+    cal_rows = (
+        [{"prob": p, "won": 1} for p in df["prob_model"]] +
+        [{"prob": 1 - p, "won": 0} for p in df["prob_model"]]
+    )
+    cal = pd.DataFrame(cal_rows)
+
     logger.info(f"\n  Calibración (predicho vs real):")
     buckets = [(0.50, 0.55), (0.55, 0.60), (0.60, 0.65), (0.65, 0.70), (0.70, 1.01)]
     for lo, hi in buckets:
-        bucket = df[(df["prob_model"] >= lo) & (df["prob_model"] < hi)]
-        if bucket.empty:
+        b = cal[(cal["prob"] >= lo) & (cal["prob"] < hi)]
+        if b.empty:
             continue
-        predicted = bucket["prob_model"].mean()
-        # p1 siempre ganó → tasa real = 1.0 cuando prob>0.5, 0.0 cuando prob<0.5
-        # Calibración real: cuántos de estos ganaron (todos, por construcción)
-        # Lo interesante es ver cuántos tienen prob > 0.5 en cada bucket
-        actual_win_rate = (bucket["prob_model"] > 0.5).mean()
+        predicted   = b["prob"].mean()
+        actual      = b["won"].mean()
+        diff        = actual - predicted
+        flag        = "✅" if abs(diff) < 0.03 else ("⬆️" if diff > 0 else "⬇️")
         logger.info(
-            f"    {lo:.0%}–{hi:.0%}: pred media {predicted:.1%} "
-            f"→ ganaron {actual_win_rate:.0%} de {len(bucket)}"
+            f"    {lo:.0%}–{hi:.0%}: pred {predicted:.1%} → real {actual:.1%} "
+            f"({diff:+.1%}) {flag}  [{len(b)//2} partidos]"
         )
 
     # Brier score (p1 siempre ganó → outcome=1)
