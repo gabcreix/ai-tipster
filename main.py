@@ -2,7 +2,11 @@ from loguru import logger
 
 from config import SPORTS_TENNIS, TOURNAMENT_SURFACE, TOURNAMENT_TOUR, BANKROLL
 from src.data.odds_client import get_odds
-from src.data.tennis_data import download_atp_matches, download_wta_matches, calculate_player_stats, get_current_rankings
+from src.data.tennis_data import (
+    download_atp_matches, download_wta_matches,
+    calculate_player_stats, get_current_rankings,
+    calculate_recent_form, calculate_h2h,
+)
 from src.data.database import init_db, save_match, save_pick, get_roi_summary
 from src.models.tennis_engine import analyze_tennis_match
 from src.notifications.telegram import send_picks, send_roi_summary
@@ -29,13 +33,23 @@ def run():
     atp_rankings = get_current_rankings("atp")
     wta_rankings = get_current_rankings("wta")
 
+    logger.info("Calculando forma reciente y H2H ATP...")
+    atp_form = {s: calculate_recent_form(atp_df, surface=s) for s in surfaces}
+    atp_h2h  = calculate_h2h(atp_df)
+
+    logger.info("Calculando forma reciente y H2H WTA...")
+    wta_form = {s: calculate_recent_form(wta_df, surface=s) for s in surfaces}
+    wta_h2h  = calculate_h2h(wta_df)
+
     all_picks = []
 
     for sport in SPORTS_TENNIS:
-        surface  = TOURNAMENT_SURFACE.get(sport, "Hard")
-        tour     = TOURNAMENT_TOUR.get(sport, "ATP")
-        stats_df = (atp_cache    if tour == "ATP" else wta_cache)[surface]
-        rankings = (atp_rankings if tour == "ATP" else wta_rankings)
+        surface     = TOURNAMENT_SURFACE.get(sport, "Hard")
+        tour        = TOURNAMENT_TOUR.get(sport, "ATP")
+        stats_df    = (atp_cache    if tour == "ATP" else wta_cache)[surface]
+        rankings    = (atp_rankings if tour == "ATP" else wta_rankings)
+        recent_form = (atp_form     if tour == "ATP" else wta_form)[surface]
+        h2h_data    = (atp_h2h      if tour == "ATP" else wta_h2h)
 
         logger.info(f"\n--- {sport} | {tour} | Superficie: {surface} ---")
         matches = get_odds(sport)
@@ -51,6 +65,7 @@ def run():
                 match, stats_df,
                 bankroll=BANKROLL, surface=surface, tour=tour,
                 rankings=rankings, tournament=sport,
+                recent_form=recent_form, h2h_data=h2h_data,
             )
 
             if not picks:

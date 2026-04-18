@@ -1,7 +1,10 @@
 import pandas as pd
 from math import comb
 from loguru import logger
-from config import MIN_EV_THRESHOLD, KELLY_FRACTION, MAX_STAKE_EUR, RANK_WEIGHT
+from config import (
+    MIN_EV_THRESHOLD, KELLY_FRACTION, MAX_STAKE_EUR,
+    RANK_WEIGHT, SERVE_WEIGHT, FORM_WEIGHT, H2H_WEIGHT, MAX_EV,
+)
 from src.data.name_mapper import map_name
 
 DEFAULT_SERVE_WIN_PCT_ATP = 0.62
@@ -139,16 +142,27 @@ def analyze_tennis_match(
     tour: str = "ATP",
     rankings: dict = None,
     tournament: str = "",
+    recent_form: dict = None,
+    h2h_data: dict = None,
 ) -> list:
     picks = []
     p1 = match["home_team"]
     p2 = match["away_team"]
     default_pct = DEFAULT_SERVE_WIN_PCT_WTA if tour == "WTA" else DEFAULT_SERVE_WIN_PCT_ATP
-    rankings = rankings or {}
+    rankings    = rankings    or {}
+    recent_form = recent_form or {}
+    h2h_data    = h2h_data    or {}
+
+    # Pre-compute known name lists once
+    known_stats = stats_df["player"].tolist() if not stats_df.empty else []
+    known_form  = list(recent_form.keys())
+    known_h2h   = list(h2h_data.keys())
+
+    def map(player: str, known: list) -> str:
+        return (map_name(player, known) or player) if known else player
 
     def get_serve_pct(player: str) -> float:
-        known = stats_df["player"].tolist() if not stats_df.empty else []
-        mapped = map_name(player, known) or player if known else player
+        mapped = map(player, known_stats)
         if not stats_df.empty:
             row = stats_df[
                 (stats_df["player"] == mapped) &
@@ -160,14 +174,21 @@ def analyze_tennis_match(
         return default_pct
 
     def get_rank_points(player: str) -> int:
-        known_names = list(rankings.keys())
-        mapped = map_name(player, known_names) or player if known_names else player
-        data = rankings.get(mapped, {})
-        pts = data.get("points", 0)
+        mapped = map(player, list(rankings.keys()))
+        pts = rankings.get(mapped, {}).get("points", 0)
         if pts == 0:
             logger.warning(f"Sin ranking para {player}, usando {DEFAULT_RANK_POINTS} pts")
             return DEFAULT_RANK_POINTS
         return pts
+
+    def get_form(player: str) -> float:
+        mapped = map(player, known_form)
+        return recent_form.get(mapped, 0.5)
+
+    def get_h2h_prob(player: str, opponent: str) -> float:
+        mp = map(player,   known_h2h)
+        mo = map(opponent, known_h2h)
+        return h2h_data.get(mp, {}).get(mo, 0.5)
 
     serve_p1 = get_serve_pct(p1)
     serve_p2 = get_serve_pct(p2)
@@ -175,19 +196,32 @@ def analyze_tennis_match(
     pts_p1 = get_rank_points(p1)
     pts_p2 = get_rank_points(p2)
 
+    form_p1_raw = get_form(p1)
+    form_p2_raw = get_form(p2)
+    form_total  = form_p1_raw + form_p2_raw
+    prob_form   = round(form_p1_raw / form_total, 4) if form_total > 0 else 0.5
+
+    prob_h2h   = get_h2h_prob(p1, p2)
     prob_serve = prob_win_match(serve_p1, serve_p2)
     prob_rank  = prob_win_by_ranking(pts_p1, pts_p2)
 
-    # Blend: 50% modelo de servicio + 50% modelo de ranking
-    prob_p1 = round(RANK_WEIGHT * prob_rank + (1 - RANK_WEIGHT) * prob_serve, 4)
+    # Blend: servicio + forma + ranking + H2H
+    prob_p1 = round(
+        SERVE_WEIGHT * prob_serve +
+        FORM_WEIGHT  * prob_form  +
+        RANK_WEIGHT  * prob_rank  +
+        H2H_WEIGHT   * prob_h2h,
+        4
+    )
     prob_p2 = round(1 - prob_p1, 4)
 
     logger.info(
-        f"{p1} (serve {serve_p1:.1%}, {pts_p1}pts) vs "
-        f"{p2} (serve {serve_p2:.1%}, {pts_p2}pts)"
+        f"{p1} (serve {serve_p1:.1%}, forma {form_p1_raw:.0%}, {pts_p1}pts) vs "
+        f"{p2} (serve {serve_p2:.1%}, forma {form_p2_raw:.0%}, {pts_p2}pts)"
     )
     logger.info(
-        f"  Servicio: {prob_serve:.2%} | Ranking: {prob_rank:.2%} | "
+        f"  Servicio: {prob_serve:.2%} | Forma: {prob_form:.2%} | "
+        f"Ranking: {prob_rank:.2%} | H2H: {prob_h2h:.2%} | "
         f"Final: {p1} {prob_p1:.2%} / {p2} {prob_p2:.2%}"
     )
 
@@ -208,6 +242,12 @@ def analyze_tennis_match(
                 ev = calculate_ev(prob, odd)
                 market_prob = round(1 / odd, 4)
 
+                if ev > MAX_EV:
+                    logger.warning(
+                        f"  {name} | EV {ev:+.2%} supera MAX_EV ({MAX_EV:.0%}) — descartado"
+                    )
+                    continue
+
                 logger.info(
                     f"  {name} | Odd: {odd} | "
                     f"Nuestra prob: {prob:.2%} | "
@@ -215,7 +255,7 @@ def analyze_tennis_match(
                     f"EV: {ev:+.2%}"
                 )
 
-                if ev >= MIN_EV_THRESHOLD:
+                if MIN_EV_THRESHOLD <= ev <= MAX_EV:
                     stake = kelly_stake(prob, odd, bankroll)
                     picks.append({
                         # identificación

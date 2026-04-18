@@ -38,8 +38,14 @@ MIN_EV_THRESHOLD = 0.03
 KELLY_FRACTION = 0.25
 MAX_STAKE_EUR = 50
 
-# Peso del modelo de ranking vs modelo de servicio (0=solo servicio, 1=solo ranking)
-RANK_WEIGHT = 0.5
+# Pesos del modelo (deben sumar 1.0)
+SERVE_WEIGHT = 0.40   # modelo jerárquico punto→game→set→partido
+FORM_WEIGHT  = 0.30   # racha reciente (últimos 20 partidos, decay exponencial)
+RANK_WEIGHT  = 0.20   # Bradley-Terry con puntos de ranking (datos algo obsoletos)
+H2H_WEIGHT   = 0.10   # historial directo entre los dos jugadores
+
+# EV máximo aceptable (picks con EV > MAX_EV se consideran errores del modelo)
+MAX_EV = 0.30
 
 # URLs
 BASE_URL_ODDS = "https://api.the-odds-api.com/v4"
