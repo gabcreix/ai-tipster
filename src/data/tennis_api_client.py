@@ -205,18 +205,44 @@ class TennisAPIClient:
     @classmethod
     def _parse_form(cls, matches: list, is_first_player: bool = True) -> list[float]:
         """
-        Devuelve lista de 1.0 (victoria) / 0.0 (derrota) en orden cronológico.
-        is_first_player=True → la perspectiva del marcador es la del jugador que analizamos.
+        Devuelve lista de scores de dominancia [0.0, 1.0] en orden cronológico.
+        Usa ratio de juegos ganados/jugados si hay scores de sets disponibles,
+        si no cae a win/loss binario (0.0 / 1.0).
         """
-        wins = []
+        scores = []
         for m in matches:
             first_won = cls._winner_is_first(m)
             if first_won is None:
                 continue
-            won = first_won if is_first_player else not first_won
-            wins.append(1.0 if won else 0.0)
 
-        return wins
+            dominance = cls._dominance(m, is_first_player)
+            scores.append(dominance)
+
+        return scores
+
+    @staticmethod
+    def _dominance(match: dict, is_first_player: bool) -> float:
+        """
+        Ratio de juegos ganados sobre juegos totales (perspectiva del jugador).
+        Ejemplo: ganó 6-3 6-2 → (6+6)/(6+3+6+2) = 12/17 ≈ 0.71
+        Ejemplo: perdió 3-6 2-6 → (3+2)/(3+6+2+6) = 5/17 ≈ 0.29
+        Fallback: 1.0 si ganó, 0.0 si perdió (sin datos de sets).
+        """
+        sets = match.get("scores") or []
+        if sets:
+            first_games  = sum(int(s.get("score_first",  0) or 0) for s in sets)
+            second_games = sum(int(s.get("score_second", 0) or 0) for s in sets)
+            total = first_games + second_games
+            if total > 0:
+                ratio = first_games / total if is_first_player else second_games / total
+                return round(ratio, 4)
+
+        # Sin scores de sets: binario
+        first_won = TennisAPIClient._winner_is_first(match)
+        if first_won is None:
+            return 0.5
+        won = first_won if is_first_player else not first_won
+        return 1.0 if won else 0.0
 
     # ------------------------------------------------------------------
     # Diagnóstico
