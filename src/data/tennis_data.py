@@ -168,6 +168,89 @@ def calculate_player_stats(df: pd.DataFrame, surface: str = None) -> pd.DataFram
     return result.sort_values("serve_win_pct", ascending=False)
 
 
+def calculate_recent_form(df: pd.DataFrame, surface: str = None, n_matches: int = 20) -> dict:
+    """
+    Devuelve {player: weighted_win_rate} con decay exponencial.
+    Si surface es especificado y el jugador tiene >= 5 partidos en esa superficie,
+    usa solo esos partidos; si no, usa todos.
+    """
+    if df.empty:
+        return {}
+    req_cols = ["winner_name", "loser_name", "surface", "tourney_date"]
+    if not all(c in df.columns for c in req_cols):
+        return {}
+
+    df = df.copy()
+    df["tourney_date"] = pd.to_datetime(
+        df["tourney_date"].astype(str), format="%Y%m%d", errors="coerce"
+    )
+    df = df.dropna(subset=["tourney_date"]).sort_values("tourney_date")
+
+    surface_key = SURFACE_MAP.get(surface, surface).lower() if surface else None
+    players = set(df["winner_name"]) | set(df["loser_name"])
+    result = {}
+
+    for player in players:
+        player_df = df[(df["winner_name"] == player) | (df["loser_name"] == player)]
+        if surface_key:
+            surf_df = player_df[player_df["surface"].str.lower() == surface_key]
+            use_df = surf_df if len(surf_df) >= 5 else player_df
+        else:
+            use_df = player_df
+
+        use_df = use_df.tail(n_matches)
+        if use_df.empty:
+            continue
+
+        n = len(use_df)
+        weights = [0.9 ** (n - 1 - i) for i in range(n)]
+        wins    = [1.0 if row["winner_name"] == player else 0.0
+                   for _, row in use_df.iterrows()]
+        result[player] = round(
+            sum(w * v for w, v in zip(weights, wins)) / sum(weights), 4
+        )
+
+    logger.info(f"Forma reciente calculada: {len(result)} jugadores (superficie: {surface or 'todas'})")
+    return result
+
+
+def calculate_h2h(df: pd.DataFrame) -> dict:
+    """Devuelve {p1: {p2: win_rate_p1}} para pares con >= 2 enfrentamientos."""
+    if df.empty:
+        return {}
+    if "winner_name" not in df.columns or "loser_name" not in df.columns:
+        return {}
+
+    from collections import defaultdict
+    wins: dict = defaultdict(int)
+
+    for _, row in df.iterrows():
+        wins[(row["winner_name"], row["loser_name"])] += 1
+
+    result: dict = {}
+    seen: set = set()
+
+    for (p1, p2) in list(wins.keys()):
+        pair = frozenset([p1, p2])
+        if pair in seen:
+            continue
+        seen.add(pair)
+
+        p1_wins = wins.get((p1, p2), 0)
+        p2_wins = wins.get((p2, p1), 0)
+        total   = p1_wins + p2_wins
+
+        if total < 2:
+            continue
+
+        result.setdefault(p1, {})[p2] = round(p1_wins / total, 4)
+        result.setdefault(p2, {})[p1] = round(p2_wins / total, 4)
+
+    h2h_pairs = sum(len(v) for v in result.values()) // 2
+    logger.info(f"H2H calculado: {h2h_pairs} pares con >= 2 enfrentamientos")
+    return result
+
+
 if __name__ == "__main__":
     df = download_atp_matches()
 
