@@ -100,15 +100,28 @@ def download_atp_matches(years: list = YEARS, include_recent: bool = True) -> pd
 
 def download_tml_atp(years: list = None) -> pd.DataFrame:
     """
-    Descarga sólo datos TML-Database para los años indicados (defecto: 2025, 2026).
-    TTL corto (2h) para obtener datos del día.
+    Devuelve partidos ATP de TML-Database para los años indicados.
+    Prioridad: DB local (match_history) → caché disco → HTTP.
     """
     if years is None:
         years = [2025, 2026]
+
+    # 1. Intentar leer de la BD local (persistente, sin TTL)
+    try:
+        from src.data.database import load_matches_from_db
+        db_df = load_matches_from_db(years=years, tour="ATP")
+        if not db_df.empty:
+            return db_df
+    except Exception as e:
+        logger.warning(f"No se pudo leer match_history: {e}")
+
+    # 2. Caché de disco (2h TTL)
     key = f"tml_atp_{'_'.join(str(y) for y in years)}"
     cached = cache.load(key)
     if cached is not None:
         return cached
+
+    # 3. HTTP
     df = _download_tml(years)
     if not df.empty:
         cache.save(key, df, ttl_hours=2)

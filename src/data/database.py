@@ -50,6 +50,7 @@ def init_db():
                 UNIQUE(match_id, bookmaker, outcome)
             );
         """)
+    init_match_history()
     logger.info(f"DB lista: {DB_PATH.resolve()}")
 
 
@@ -148,6 +149,146 @@ def get_pending_picks() -> list:
             JOIN matches m ON p.match_id = m.id
             WHERE p.result IS NULL
             ORDER BY p.created_at DESC
+        """).fetchall()
+
+
+def init_match_history():
+    """Crea la tabla match_history si no existe."""
+    with get_connection() as conn:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS match_history (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                synced_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                source              TEXT NOT NULL,
+                tour                TEXT NOT NULL DEFAULT 'ATP',
+                tourney_id          TEXT NOT NULL,
+                match_num           INTEGER NOT NULL,
+                tourney_date        INTEGER,
+                tourney_name        TEXT,
+                surface             TEXT,
+                winner_name         TEXT,
+                loser_name          TEXT,
+                winner_rank         REAL,
+                loser_rank          REAL,
+                winner_rank_points  REAL,
+                loser_rank_points   REAL,
+                w_svpt              REAL,
+                w_1stIn             REAL,
+                w_1stWon            REAL,
+                w_2ndWon            REAL,
+                l_svpt              REAL,
+                l_1stIn             REAL,
+                l_1stWon            REAL,
+                l_2ndWon            REAL,
+                score               TEXT,
+                UNIQUE(tourney_id, match_num)
+            );
+            CREATE INDEX IF NOT EXISTS idx_mh_tour_date
+                ON match_history (tour, tourney_date);
+        """)
+
+
+def upsert_matches(df, source: str, tour: str = "ATP") -> int:
+    """
+    Inserta filas de un DataFrame de partidos en match_history.
+    Ignora duplicados (UNIQUE tourney_id + match_num).
+    Devuelve el número de filas nuevas insertadas.
+    """
+    import pandas as pd
+
+    cols = {
+        "tourney_id":         "tourney_id",
+        "match_num":          "match_num",
+        "tourney_date":       "tourney_date",
+        "tourney_name":       "tourney_name",
+        "surface":            "surface",
+        "winner_name":        "winner_name",
+        "loser_name":         "loser_name",
+        "winner_rank":        "winner_rank",
+        "loser_rank":         "loser_rank",
+        "winner_rank_points": "winner_rank_points",
+        "loser_rank_points":  "loser_rank_points",
+        "w_svpt":             "w_svpt",
+        "w_1stIn":            "w_1stIn",
+        "w_1stWon":           "w_1stWon",
+        "w_2ndWon":           "w_2ndWon",
+        "l_svpt":             "l_svpt",
+        "l_1stIn":            "l_1stIn",
+        "l_1stWon":           "l_1stWon",
+        "l_2ndWon":           "l_2ndWon",
+        "score":              "score",
+    }
+
+    present = {k: v for k, v in cols.items() if k in df.columns}
+    inserted = 0
+
+    with get_connection() as conn:
+        for _, row in df.iterrows():
+            values = {db_col: row.get(src_col) for src_col, db_col in present.items()}
+            # Convertir NaN a None
+            values = {k: (None if (isinstance(v, float) and pd.isna(v)) else v)
+                      for k, v in values.items()}
+            values["source"] = source
+            values["tour"]   = tour
+
+            placeholders = ", ".join(f":{k}" for k in values)
+            col_names     = ", ".join(values.keys())
+            try:
+                conn.execute(
+                    f"INSERT OR IGNORE INTO match_history ({col_names}) VALUES ({placeholders})",
+                    values,
+                )
+                inserted += conn.execute("SELECT changes()").fetchone()[0]
+            except Exception as e:
+                logger.warning(f"upsert_matches: fila ignorada — {e}")
+
+    return inserted
+
+
+def load_matches_from_db(years: list = None, tour: str = "ATP"):
+    """
+    Lee partidos de match_history como DataFrame.
+    Filtra por años (tourney_date YYYYMMDD) y tour.
+    """
+    import pandas as pd
+
+    with get_connection() as conn:
+        if years:
+            placeholders = ",".join("?" for _ in years)
+            date_filters = " OR ".join(
+                f"(tourney_date >= {y}0101 AND tourney_date <= {y}1231)"
+                for y in years
+            )
+            rows = conn.execute(
+                f"SELECT * FROM match_history WHERE tour = ? AND ({date_filters})",
+                [tour],
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM match_history WHERE tour = ?", [tour]
+            ).fetchall()
+
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame([dict(r) for r in rows])
+    logger.info(f"match_history: {len(df)} partidos {tour} leídos de DB")
+    return df
+
+
+def get_match_history_counts() -> list:
+    """Resumen de cuántos partidos hay por source/tour/año."""
+    with get_connection() as conn:
+        return conn.execute("""
+            SELECT
+                source,
+                tour,
+                CAST(tourney_date / 10000 AS INTEGER) AS year,
+                COUNT(*) AS matches
+            FROM match_history
+            WHERE tourney_date IS NOT NULL
+            GROUP BY source, tour, year
+            ORDER BY year DESC, tour
         """).fetchall()
 
 

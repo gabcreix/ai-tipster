@@ -27,6 +27,15 @@ def save(key: str, data, ttl_hours: float = 24.0):
     logger.debug(f"Caché guardado: {key} (TTL {ttl_hours}h)")
 
 
+def invalidate(key: str):
+    """Elimina una entrada de caché para forzar re-descarga."""
+    meta_path, data_path = _paths(key)
+    for p in (meta_path, data_path):
+        if p.exists():
+            p.unlink()
+    logger.debug(f"Caché invalidado: {key}")
+
+
 def load(key: str):
     meta_path, data_path = _paths(key)
     if not meta_path.exists() or not data_path.exists():
