@@ -8,3 +8,4 @@ data/processed/
 logs/
 *.log
 .DS_Storedata/*.db
+data/tipster.db
