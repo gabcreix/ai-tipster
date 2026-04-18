@@ -4,9 +4,10 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # APIs
-ODDS_API_KEY = os.getenv("ODDS_API_KEY")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+ODDS_API_KEY        = os.getenv("ODDS_API_KEY")
+TELEGRAM_BOT_TOKEN  = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID    = os.getenv("TELEGRAM_CHAT_ID")
+TENNIS_API_KEY      = os.getenv("TENNIS_API_KEY")   # api-tennis.com (opcional)
 
 # Deportes activos
 SPORTS_FOOTBALL = ["soccer_spain_la_liga", "soccer_epl"]

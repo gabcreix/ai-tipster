@@ -1,12 +1,13 @@
 from loguru import logger
 
-from config import SPORTS_TENNIS, TOURNAMENT_SURFACE, TOURNAMENT_TOUR, BANKROLL
+from config import SPORTS_TENNIS, TOURNAMENT_SURFACE, TOURNAMENT_TOUR, BANKROLL, TENNIS_API_KEY
 from src.data.odds_client import get_odds
 from src.data.tennis_data import (
     download_atp_matches, download_wta_matches,
     calculate_player_stats, get_current_rankings,
     calculate_recent_form, calculate_h2h,
 )
+from src.data.tennis_api_client import TennisAPIClient
 from src.data.database import init_db, save_match, save_pick, get_roi_summary
 from src.models.tennis_engine import analyze_tennis_match
 from src.notifications.telegram import send_picks, send_roi_summary
@@ -28,16 +29,33 @@ def run():
         return []
 
     surfaces = ["Clay", "Hard", "Grass"]
-    atp_cache    = {s: calculate_player_stats(atp_df, surface=s) for s in surfaces}
-    wta_cache    = {s: calculate_player_stats(wta_df, surface=s) for s in surfaces}
-    atp_rankings = get_current_rankings("atp")
-    wta_rankings = get_current_rankings("wta")
+    atp_cache = {s: calculate_player_stats(atp_df, surface=s) for s in surfaces}
+    wta_cache = {s: calculate_player_stats(wta_df, surface=s) for s in surfaces}
 
-    logger.info("Calculando forma reciente y H2H ATP...")
+    # Rankings: api-tennis.com si hay clave, JeffSackmann como fallback
+    api_client: TennisAPIClient | None = None
+    if TENNIS_API_KEY:
+        api_client = TennisAPIClient(TENNIS_API_KEY)
+        logger.info("api-tennis.com activo — rankings y H2H en tiempo real")
+        atp_rankings = api_client.get_rankings("ATP")
+        wta_rankings = api_client.get_rankings("WTA")
+        if not atp_rankings:
+            logger.warning("api-tennis: rankings ATP vacíos, usando JeffSackmann")
+            atp_rankings = get_current_rankings("atp")
+        if not wta_rankings:
+            logger.warning("api-tennis: rankings WTA vacíos, usando JeffSackmann")
+            wta_rankings = get_current_rankings("wta")
+    else:
+        logger.info("TENNIS_API_KEY no configurado — usando datos históricos JeffSackmann")
+        atp_rankings = get_current_rankings("atp")
+        wta_rankings = get_current_rankings("wta")
+
+    # Forma y H2H históricos (siempre, como base y fallback)
+    logger.info("Calculando forma reciente y H2H históricos ATP...")
     atp_form = {s: calculate_recent_form(atp_df, surface=s) for s in surfaces}
     atp_h2h  = calculate_h2h(atp_df)
 
-    logger.info("Calculando forma reciente y H2H WTA...")
+    logger.info("Calculando forma reciente y H2H históricos WTA...")
     wta_form = {s: calculate_recent_form(wta_df, surface=s) for s in surfaces}
     wta_h2h  = calculate_h2h(wta_df)
 
@@ -61,11 +79,24 @@ def run():
         logger.info(f"{len(matches)} partido(s) encontrado(s)")
 
         for match in matches:
+            p1 = match["home_team"]
+            p2 = match["away_team"]
+
+            # Sobreescribir forma y H2H con datos en tiempo real si disponemos del cliente
+            match_form  = recent_form
+            match_h2h   = h2h_data
+            if api_client:
+                live = api_client.get_match_live_data(p1, p2, tour)
+                # Construir dicts pequeños con los nombres exactos del partido
+                match_form = {p1: live["form_p1"], p2: live["form_p2"]}
+                match_h2h  = {p1: {p2: live["h2h_prob_p1"]},
+                               p2: {p1: round(1 - live["h2h_prob_p1"], 4)}}
+
             picks = analyze_tennis_match(
                 match, stats_df,
                 bankroll=BANKROLL, surface=surface, tour=tour,
                 rankings=rankings, tournament=sport,
-                recent_form=recent_form, h2h_data=h2h_data,
+                recent_form=match_form, h2h_data=match_h2h,
             )
 
             if not picks:
