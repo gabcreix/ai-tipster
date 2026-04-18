@@ -9,7 +9,7 @@ BASE_URL_ATP = "https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master
 BASE_URL_WTA = "https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master"
 BASE_URL = BASE_URL_ATP  # compatibilidad
 
-YEARS = [2022, 2023, 2024, 2025, 2026]
+YEARS = [2022, 2023, 2024]  # 2025+ aún no disponible en JeffSackmann
 
 SURFACE_MAP = {
     "Hard": "hard",
