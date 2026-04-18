@@ -1,8 +1,12 @@
 """
 Sincroniza partidos de TML-Database (ATP 2025/2026) a la BD local.
 
+Fuentes TML-Database:
+  - {year}.csv          → partidos del año completo (se actualiza al cerrar torneos)
+  - ongoing_tourneys.csv → torneos en curso (se actualiza más frecuentemente)
+
 Uso:
-  python sync.py                  # sincroniza 2025 + año actual
+  python sync.py                  # sincroniza 2025 + año actual + ongoing
   python sync.py --years 2025     # sólo 2025
   python sync.py --years 2025 2026 --force  # fuerza re-descarga aunque haya caché
 
@@ -11,17 +15,53 @@ no genera duplicados. Ideal para cron diario o llamada desde scheduler.py.
 """
 import argparse
 from datetime import datetime
+from io import StringIO
+
+import pandas as pd
+import requests
 from loguru import logger
 
 from src.data.database import (
     init_db, upsert_matches, get_match_history_counts,
 )
-from src.data.tennis_data import _download_tml
+from src.data.tennis_data import _download_tml, BASE_URL_TML
 from src.data import cache
 
 
 CURRENT_YEAR = datetime.now().year
 DEFAULT_YEARS = sorted({2025, CURRENT_YEAR})
+
+
+def sync_ongoing(force: bool = False) -> int:
+    """
+    Descarga ongoing_tourneys.csv y lo persiste en match_history.
+    Este archivo contiene torneos en curso no volcados aún al CSV anual.
+    """
+    cache_key = "tml_ongoing"
+    if force:
+        cache.invalidate(cache_key)
+
+    cached = cache.load(cache_key)
+    if cached is not None:
+        df = cached
+    else:
+        url = f"{BASE_URL_TML}/ongoing_tourneys.csv"
+        logger.info("Descargando ongoing_tourneys.csv...")
+        try:
+            r = requests.get(url, timeout=15)
+            if r.status_code != 200:
+                logger.warning(f"  ongoing_tourneys: HTTP {r.status_code}")
+                return 0
+            df = pd.read_csv(StringIO(r.text))
+            cache.save(cache_key, df, ttl_hours=1)
+            logger.info(f"  {len(df)} partidos en ongoing_tourneys")
+        except Exception as e:
+            logger.error(f"  Error descargando ongoing_tourneys: {e}")
+            return 0
+
+    new_rows = upsert_matches(df, source="tml_ongoing", tour="ATP")
+    logger.info(f"  ongoing_tourneys → {new_rows} nuevos en DB")
+    return new_rows
 
 
 def sync_tml(years: list[int], force: bool = False) -> dict[int, int]:
@@ -56,10 +96,10 @@ def print_summary():
         logger.info("match_history vacía.")
         return
     logger.info("\n  Estado actual de match_history:")
-    logger.info(f"  {'Source':12s} {'Tour':5s} {'Año':6s} {'Partidos':>8s}")
-    logger.info(f"  {'-'*35}")
+    logger.info(f"  {'Source':15s} {'Tour':5s} {'Año':6s} {'Partidos':>8s}")
+    logger.info(f"  {'-'*38}")
     for r in rows:
-        logger.info(f"  {r['source']:12s} {r['tour']:5s} {r['year']:6d} {r['matches']:>8d}")
+        logger.info(f"  {r['source']:15s} {r['tour']:5s} {r['year']:6d} {r['matches']:>8d}")
 
 
 def run(years: list[int] = None, force: bool = False):
@@ -70,8 +110,9 @@ def run(years: list[int] = None, force: bool = False):
 
     logger.info(f"=== Sync — años: {years} {'(force)' if force else ''} ===")
     totals = sync_tml(years, force=force)
+    ongoing_new = sync_ongoing(force=force)
 
-    total_new = sum(totals.values())
+    total_new = sum(totals.values()) + ongoing_new
     logger.info(f"\n  Total nuevos partidos insertados: {total_new}")
     print_summary()
     return totals
