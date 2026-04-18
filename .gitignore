@@ -7,5 +7,5 @@ data/raw/
 data/processed/
 logs/
 *.log
-.DS_Storedata/*.db
-data/tipster.db
+.DS_Store
+data/*.db
