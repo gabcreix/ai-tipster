@@ -20,6 +20,13 @@ TOURNAMENT_SURFACE = {
     "tennis_wta_stuttgart_open": "Clay",
 }
 
+# Circuito por torneo
+TOURNAMENT_TOUR = {
+    "tennis_atp_barcelona_open": "ATP",
+    "tennis_atp_munich":         "ATP",
+    "tennis_wta_stuttgart_open": "WTA",
+}
+
 # Bankroll inicial
 BANKROLL = 1000
 

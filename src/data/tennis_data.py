@@ -4,8 +4,10 @@ import os
 from io import StringIO
 from loguru import logger
 
-# Repositorio JeffSackmann ATP
-BASE_URL = "https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master"
+# Repositorios JeffSackmann
+BASE_URL_ATP = "https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master"
+BASE_URL_WTA = "https://raw.githubusercontent.com/JeffSackmann/tennis_wta/master"
+BASE_URL = BASE_URL_ATP  # compatibilidad
 
 YEARS = [2022, 2023, 2024, 2025, 2026]
 
@@ -17,14 +19,11 @@ SURFACE_MAP = {
 }
 
 
-def download_atp_matches(years: list = YEARS) -> pd.DataFrame:
-    """Descarga histórico de partidos ATP de JeffSackmann."""
+def _download_matches(base_url: str, prefix: str, years: list) -> pd.DataFrame:
     dfs = []
-
     for year in years:
-        url = f"{BASE_URL}/atp_matches_{year}.csv"
-        logger.info(f"Descargando ATP {year}...")
-
+        url = f"{base_url}/{prefix}_matches_{year}.csv"
+        logger.info(f"Descargando {prefix.upper()} {year}...")
         try:
             response = requests.get(url, timeout=10)
             if response.status_code == 200:
@@ -40,8 +39,16 @@ def download_atp_matches(years: list = YEARS) -> pd.DataFrame:
         return pd.DataFrame()
 
     full = pd.concat(dfs, ignore_index=True)
-    logger.info(f"Total: {len(full)} partidos ATP ({years[0]}-{years[-1]})")
+    logger.info(f"Total: {len(full)} partidos {prefix.upper()} ({years[0]}-{years[-1]})")
     return full
+
+
+def download_atp_matches(years: list = YEARS) -> pd.DataFrame:
+    return _download_matches(BASE_URL_ATP, "atp", years)
+
+
+def download_wta_matches(years: list = YEARS) -> pd.DataFrame:
+    return _download_matches(BASE_URL_WTA, "wta", years)
 
 
 def calculate_player_stats(df: pd.DataFrame, surface: str = None) -> pd.DataFrame:

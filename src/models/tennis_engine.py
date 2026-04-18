@@ -4,7 +4,9 @@ from loguru import logger
 from config import MIN_EV_THRESHOLD, KELLY_FRACTION, MAX_STAKE_EUR
 from src.data.name_mapper import map_name
 
-DEFAULT_SERVE_WIN_PCT = 0.62
+DEFAULT_SERVE_WIN_PCT_ATP = 0.62
+DEFAULT_SERVE_WIN_PCT_WTA = 0.55
+DEFAULT_SERVE_WIN_PCT = DEFAULT_SERVE_WIN_PCT_ATP  # fallback
 
 
 def prob_win_game(p: float) -> float:
@@ -124,22 +126,25 @@ def analyze_tennis_match(
     stats_df: pd.DataFrame,
     bankroll: float = 1000,
     surface: str = "Clay",
+    tour: str = "ATP",
 ) -> list:
     picks = []
     p1 = match["home_team"]
     p2 = match["away_team"]
+    default_pct = DEFAULT_SERVE_WIN_PCT_WTA if tour == "WTA" else DEFAULT_SERVE_WIN_PCT_ATP
 
     def get_serve_pct(player: str) -> float:
-        known = stats_df["player"].tolist()
-        mapped = map_name(player, known) or player
-        row = stats_df[
-            (stats_df["player"] == mapped) &
-            (stats_df["surface"].str.lower() == surface.lower())
-        ]
-        if not row.empty:
-            return float(row.iloc[0]["serve_win_pct"])
-        logger.warning(f"Sin datos para {player} en {surface}, usando media")
-        return DEFAULT_SERVE_WIN_PCT
+        known = stats_df["player"].tolist() if not stats_df.empty else []
+        mapped = map_name(player, known) or player if known else player
+        if not stats_df.empty:
+            row = stats_df[
+                (stats_df["player"] == mapped) &
+                (stats_df["surface"].str.lower() == surface.lower())
+            ]
+            if not row.empty:
+                return float(row.iloc[0]["serve_win_pct"])
+        logger.warning(f"Sin datos para {player} en {surface}, usando media {tour}")
+        return default_pct
 
     serve_p1 = get_serve_pct(p1)
     serve_p2 = get_serve_pct(p2)
