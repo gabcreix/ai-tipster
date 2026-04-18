@@ -7,7 +7,7 @@ from loguru import logger
 # Repositorio JeffSackmann ATP
 BASE_URL = "https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master"
 
-YEARS = [2022, 2023, 2024, 2025]
+YEARS = [2022, 2023, 2024, 2025, 2026]
 
 SURFACE_MAP = {
     "Hard": "hard",

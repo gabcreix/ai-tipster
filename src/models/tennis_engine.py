@@ -2,6 +2,7 @@ import pandas as pd
 from math import comb
 from loguru import logger
 from config import MIN_EV_THRESHOLD, KELLY_FRACTION, MAX_STAKE_EUR
+from src.data.name_mapper import map_name
 
 DEFAULT_SERVE_WIN_PCT = 0.62
 
@@ -128,8 +129,10 @@ def analyze_tennis_match(
     p2 = match["away_team"]
 
     def get_serve_pct(player: str) -> float:
+        known = stats_df["player"].tolist()
+        mapped = map_name(player, known) or player
         row = stats_df[
-            (stats_df["player"] == player) &
+            (stats_df["player"] == mapped) &
             (stats_df["surface"].str.lower() == surface.lower())
         ]
         if not row.empty:

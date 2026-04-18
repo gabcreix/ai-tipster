@@ -13,6 +13,16 @@ SPORTS_FOOTBALL = ["soccer_spain_la_liga", "soccer_epl"]
 SPORTS_TENNIS = ["tennis_atp_barcelona_open", "tennis_atp_munich", "tennis_wta_stuttgart_open"]
 SPORTS = SPORTS_FOOTBALL + SPORTS_TENNIS
 
+# Superficie por torneo (para el modelo de tenis)
+TOURNAMENT_SURFACE = {
+    "tennis_atp_barcelona_open": "Clay",
+    "tennis_atp_munich":         "Clay",
+    "tennis_wta_stuttgart_open": "Clay",
+}
+
+# Bankroll inicial
+BANKROLL = 1000
+
 # Casas
 BOOKMAKERS = ["pinnacle", "betfair", "bet365", "unibet"]
 
