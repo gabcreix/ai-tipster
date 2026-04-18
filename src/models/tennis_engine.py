@@ -77,7 +77,8 @@ def prob_win_set(p1_serve: float, p2_serve: float) -> float:
     prob += comb(10, 5) * p**6 * q**5 * p
 
     # P1 gana tiebreak (llegan a 6-6)
-    p_66 = comb(12, 6) * p**6 * q**6
+    # 2*C(10,5) excluye caminos donde uno ya ganó 6 antes de llegar a 6-6
+    p_66 = 2 * comb(10, 5) * p**6 * q**6
     prob += p_66 * prob_win_tiebreak(p1_serve, p2_serve)
 
     return min(max(prob, 0), 1)
