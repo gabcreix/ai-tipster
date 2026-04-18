@@ -138,6 +138,7 @@ def analyze_tennis_match(
     surface: str = "Clay",
     tour: str = "ATP",
     rankings: dict = None,
+    tournament: str = "",
 ) -> list:
     picks = []
     p1 = match["home_team"]
@@ -217,15 +218,29 @@ def analyze_tennis_match(
                 if ev >= MIN_EV_THRESHOLD:
                     stake = kelly_stake(prob, odd, bankroll)
                     picks.append({
-                        "match":        f"{p1} vs {p2}",
-                        "surface":      surface,
-                        "bookmaker":    bookmaker["title"],
-                        "outcome":      name,
-                        "odd":          odd,
-                        "our_prob":     prob,
-                        "market_prob":  market_prob,
-                        "ev":           ev,
-                        "stake_eur":    stake,
+                        # identificación
+                        "match":         f"{p1} vs {p2}",
+                        "player1":       p1,
+                        "player2":       p2,
+                        "tournament":    tournament,
+                        "surface":       surface,
+                        "tour":          tour,
+                        # pick
+                        "bookmaker":     bookmaker["title"],
+                        "outcome":       name,
+                        "odd":           odd,
+                        "our_prob":      prob,
+                        "market_prob":   market_prob,
+                        "ev":            ev,
+                        "stake_eur":     stake,
+                        # features del modelo (para la DB)
+                        "serve_pct_p1":  serve_p1,
+                        "serve_pct_p2":  serve_p2,
+                        "rank_pts_p1":   pts_p1,
+                        "rank_pts_p2":   pts_p2,
+                        "prob_serve":    prob_serve,
+                        "prob_rank":     prob_rank,
+                        "prob_final_p1": prob_p1,
                     })
 
     return picks
