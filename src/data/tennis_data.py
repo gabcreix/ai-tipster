@@ -51,43 +51,59 @@ def download_wta_matches(years: list = YEARS) -> pd.DataFrame:
     return _download_matches(BASE_URL_WTA, "wta", years)
 
 
-def get_player_rankings(df: pd.DataFrame) -> dict:
+def get_current_rankings(tour: str = "atp") -> dict:
     """
-    Extrae el ranking más reciente de cada jugador.
+    Descarga rankings actuales de JeffSackmann usando los archivos
+    *_rankings_current.csv + *_players.csv.
     Devuelve dict: {player_name: {"rank": int, "points": int}}
     """
-    if df.empty:
-        return {}
+    base = BASE_URL_ATP if tour == "atp" else BASE_URL_WTA
+    tour_upper = tour.upper()
 
-    cols = ["winner_name", "winner_rank", "winner_rank_points",
-            "loser_name",  "loser_rank",  "loser_rank_points", "tourney_date"]
+    try:
+        rankings_resp = requests.get(f"{base}/{tour}_rankings_current.csv", timeout=10)
+        players_resp  = requests.get(f"{base}/{tour}_players.csv",          timeout=10)
 
-    available = [c for c in cols if c in df.columns]
-    if len(available) < 4:
-        return {}
+        if rankings_resp.status_code != 200 or players_resp.status_code != 200:
+            logger.warning(f"No se pudieron descargar rankings {tour_upper}")
+            return {}
 
-    df = df[available].copy()
-    df["tourney_date"] = pd.to_numeric(df["tourney_date"], errors="coerce")
-    df = df.sort_values("tourney_date", ascending=False)
+        rankings_df = pd.read_csv(StringIO(rankings_resp.text))
+        players_df  = pd.read_csv(StringIO(players_resp.text), low_memory=False)
 
-    rankings = {}
+        # Quedarse con la semana más reciente
+        latest = rankings_df["ranking_date"].max()
+        rankings_df = rankings_df[rankings_df["ranking_date"] == latest]
 
-    for _, row in df.iterrows():
-        for name_col, rank_col, pts_col in [
-            ("winner_name", "winner_rank", "winner_rank_points"),
-            ("loser_name",  "loser_rank",  "loser_rank_points"),
-        ]:
-            if name_col not in df.columns:
+        # Construir nombre completo en el mismo formato que los partidos
+        players_df["full_name"] = (
+            players_df["name_first"].str.strip()
+            + " "
+            + players_df["name_last"].str.strip()
+        )
+
+        merged = rankings_df.merge(
+            players_df[["player_id", "full_name"]],
+            left_on="player", right_on="player_id",
+            how="left",
+        )
+
+        result = {}
+        for _, row in merged.iterrows():
+            name = row.get("full_name")
+            if pd.isna(name) or not name.strip():
                 continue
-            name = row[name_col]
-            if name not in rankings and pd.notna(row.get(rank_col)):
-                rankings[name] = {
-                    "rank":   int(row[rank_col]),
-                    "points": int(row[pts_col]) if pd.notna(row.get(pts_col)) else 0,
-                }
+            result[name] = {
+                "rank":   int(row["rank"]),
+                "points": int(row["points"]) if pd.notna(row["points"]) else 0,
+            }
 
-    logger.info(f"Rankings extraídos: {len(rankings)} jugadores")
-    return rankings
+        logger.info(f"Rankings {tour_upper} descargados: {len(result)} jugadores (semana {latest})")
+        return result
+
+    except Exception as e:
+        logger.error(f"Error descargando rankings {tour_upper}: {e}")
+        return {}
 
 
 def calculate_player_stats(df: pd.DataFrame, surface: str = None) -> pd.DataFrame:

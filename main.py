@@ -2,7 +2,7 @@ from loguru import logger
 
 from config import SPORTS_TENNIS, TOURNAMENT_SURFACE, TOURNAMENT_TOUR, BANKROLL
 from src.data.odds_client import get_odds
-from src.data.tennis_data import download_atp_matches, download_wta_matches, calculate_player_stats, get_player_rankings
+from src.data.tennis_data import download_atp_matches, download_wta_matches, calculate_player_stats, get_current_rankings
 from src.models.tennis_engine import analyze_tennis_match
 
 
@@ -23,8 +23,8 @@ def run():
     atp_cache = {s: calculate_player_stats(atp_df, surface=s) for s in surfaces}
     wta_cache = {s: calculate_player_stats(wta_df, surface=s) for s in surfaces}
 
-    atp_rankings = get_player_rankings(atp_df)
-    wta_rankings = get_player_rankings(wta_df)
+    atp_rankings = get_current_rankings("atp")
+    wta_rankings = get_current_rankings("wta")
 
     all_picks = []
 
