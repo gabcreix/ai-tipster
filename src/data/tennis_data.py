@@ -3,6 +3,7 @@ import requests
 import os
 from io import StringIO
 from loguru import logger
+from src.data import cache
 
 # Repositorios JeffSackmann
 BASE_URL_ATP = "https://raw.githubusercontent.com/JeffSackmann/tennis_atp/master"
@@ -44,11 +45,25 @@ def _download_matches(base_url: str, prefix: str, years: list) -> pd.DataFrame:
 
 
 def download_atp_matches(years: list = YEARS) -> pd.DataFrame:
-    return _download_matches(BASE_URL_ATP, "atp", years)
+    key = f"atp_matches_{years[0]}_{years[-1]}"
+    cached = cache.load(key)
+    if cached is not None:
+        return cached
+    df = _download_matches(BASE_URL_ATP, "atp", years)
+    if not df.empty:
+        cache.save(key, df, ttl_hours=12)
+    return df
 
 
 def download_wta_matches(years: list = YEARS) -> pd.DataFrame:
-    return _download_matches(BASE_URL_WTA, "wta", years)
+    key = f"wta_matches_{years[0]}_{years[-1]}"
+    cached = cache.load(key)
+    if cached is not None:
+        return cached
+    df = _download_matches(BASE_URL_WTA, "wta", years)
+    if not df.empty:
+        cache.save(key, df, ttl_hours=12)
+    return df
 
 
 def get_current_rankings(tour: str = "atp") -> dict:
@@ -59,6 +74,11 @@ def get_current_rankings(tour: str = "atp") -> dict:
     """
     base = BASE_URL_ATP if tour == "atp" else BASE_URL_WTA
     tour_upper = tour.upper()
+
+    key    = f"rankings_jeffsackmann_{tour}"
+    cached = cache.load(key)
+    if cached is not None:
+        return cached
 
     try:
         rankings_resp = requests.get(f"{base}/{tour}_rankings_current.csv", timeout=10)
@@ -99,6 +119,7 @@ def get_current_rankings(tour: str = "atp") -> dict:
             }
 
         logger.info(f"Rankings {tour_upper} descargados: {len(result)} jugadores (semana {latest})")
+        cache.save(key, result, ttl_hours=24)
         return result
 
     except Exception as e:

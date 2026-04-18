@@ -12,6 +12,7 @@ import unicodedata
 from loguru import logger
 
 from src.data.name_mapper import map_name, normalize
+from src.data import cache
 
 BASE_URL = "https://api.api-tennis.com/tennis/"
 
@@ -50,6 +51,12 @@ class TennisAPIClient:
         if tour_upper in self._standings:
             return self._standings[tour_upper]
 
+        cache_key = f"api_tennis_rankings_{tour_upper}"
+        cached = cache.load(cache_key)
+        if cached is not None:
+            self._standings[tour_upper] = cached
+            return cached
+
         result = self._get("get_standings", event_type=tour_upper)
         if not result:
             logger.warning(f"api-tennis: rankings {tour_upper} no disponibles")
@@ -70,6 +77,7 @@ class TennisAPIClient:
                 continue
 
         logger.info(f"api-tennis: {len(out)} jugadores en rankings {tour_upper}")
+        cache.save(cache_key, out, ttl_hours=6)
         self._standings[tour_upper] = out
         return out
 
@@ -114,6 +122,11 @@ class TennisAPIClient:
         if not key1 or not key2:
             return default
 
+        cache_key = f"api_tennis_h2h_{min(key1,key2)}_{max(key1,key2)}"
+        cached = cache.load(cache_key)
+        if cached is not None:
+            return cached
+
         result = self._get("get_H2H", first_player_key=key1, second_player_key=key2)
         if not result:
             return default
@@ -157,6 +170,7 @@ class TennisAPIClient:
                     f"→ {out[form_key]:.0%} (decay)"
                 )
 
+        cache.save(cache_key, out, ttl_hours=2)
         return out
 
     # ------------------------------------------------------------------
@@ -228,10 +242,18 @@ class TennisAPIClient:
         Ejemplo: perdió 3-6 2-6 → (3+2)/(3+6+2+6) = 5/17 ≈ 0.29
         Fallback: 1.0 si ganó, 0.0 si perdió (sin datos de sets).
         """
+        def _games(val) -> int:
+            # Tiebreak scores come as '7.7' (set score '7', tiebreak '7')
+            # We only need the integer set-score part
+            try:
+                return int(float(str(val).split(".")[0]))
+            except (ValueError, TypeError):
+                return 0
+
         sets = match.get("scores") or []
         if sets:
-            first_games  = sum(int(s.get("score_first",  0) or 0) for s in sets)
-            second_games = sum(int(s.get("score_second", 0) or 0) for s in sets)
+            first_games  = sum(_games(s.get("score_first",  0)) for s in sets)
+            second_games = sum(_games(s.get("score_second", 0)) for s in sets)
             total = first_games + second_games
             if total > 0:
                 ratio = first_games / total if is_first_player else second_games / total
