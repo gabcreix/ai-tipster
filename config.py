@@ -38,5 +38,8 @@ MIN_EV_THRESHOLD = 0.03
 KELLY_FRACTION = 0.25
 MAX_STAKE_EUR = 50
 
+# Peso del modelo de ranking vs modelo de servicio (0=solo servicio, 1=solo ranking)
+RANK_WEIGHT = 0.5
+
 # URLs
 BASE_URL_ODDS = "https://api.the-odds-api.com/v4"

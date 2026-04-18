@@ -1,12 +1,22 @@
 import pandas as pd
 from math import comb
 from loguru import logger
-from config import MIN_EV_THRESHOLD, KELLY_FRACTION, MAX_STAKE_EUR
+from config import MIN_EV_THRESHOLD, KELLY_FRACTION, MAX_STAKE_EUR, RANK_WEIGHT
 from src.data.name_mapper import map_name
 
 DEFAULT_SERVE_WIN_PCT_ATP = 0.62
 DEFAULT_SERVE_WIN_PCT_WTA = 0.55
 DEFAULT_SERVE_WIN_PCT = DEFAULT_SERVE_WIN_PCT_ATP  # fallback
+
+DEFAULT_RANK_POINTS = 100  # puntos asignados a jugadores sin ranking conocido
+
+
+def prob_win_by_ranking(points_p1: int, points_p2: int) -> float:
+    """Bradley-Terry: prob de que P1 gane basado en puntos de ranking."""
+    total = points_p1 + points_p2
+    if total == 0:
+        return 0.5
+    return round(points_p1 / total, 4)
 
 
 def prob_win_game(p: float) -> float:
@@ -127,11 +137,13 @@ def analyze_tennis_match(
     bankroll: float = 1000,
     surface: str = "Clay",
     tour: str = "ATP",
+    rankings: dict = None,
 ) -> list:
     picks = []
     p1 = match["home_team"]
     p2 = match["away_team"]
     default_pct = DEFAULT_SERVE_WIN_PCT_WTA if tour == "WTA" else DEFAULT_SERVE_WIN_PCT_ATP
+    rankings = rankings or {}
 
     def get_serve_pct(player: str) -> float:
         known = stats_df["player"].tolist() if not stats_df.empty else []
@@ -143,17 +155,40 @@ def analyze_tennis_match(
             ]
             if not row.empty:
                 return float(row.iloc[0]["serve_win_pct"])
-        logger.warning(f"Sin datos para {player} en {surface}, usando media {tour}")
+        logger.warning(f"Sin datos de servicio para {player} en {surface}, usando media {tour}")
         return default_pct
+
+    def get_rank_points(player: str) -> int:
+        known_names = list(rankings.keys())
+        mapped = map_name(player, known_names) or player if known_names else player
+        data = rankings.get(mapped, {})
+        pts = data.get("points", 0)
+        if pts == 0:
+            logger.warning(f"Sin ranking para {player}, usando {DEFAULT_RANK_POINTS} pts")
+            return DEFAULT_RANK_POINTS
+        return pts
 
     serve_p1 = get_serve_pct(p1)
     serve_p2 = get_serve_pct(p2)
 
-    prob_p1 = prob_win_match(serve_p1, serve_p2)
+    pts_p1 = get_rank_points(p1)
+    pts_p2 = get_rank_points(p2)
+
+    prob_serve = prob_win_match(serve_p1, serve_p2)
+    prob_rank  = prob_win_by_ranking(pts_p1, pts_p2)
+
+    # Blend: 50% modelo de servicio + 50% modelo de ranking
+    prob_p1 = round(RANK_WEIGHT * prob_rank + (1 - RANK_WEIGHT) * prob_serve, 4)
     prob_p2 = round(1 - prob_p1, 4)
 
-    logger.info(f"{p1} ({serve_p1:.1%} serve) vs {p2} ({serve_p2:.1%} serve)")
-    logger.info(f"Probs modelo → {p1}: {prob_p1:.2%} | {p2}: {prob_p2:.2%}")
+    logger.info(
+        f"{p1} (serve {serve_p1:.1%}, {pts_p1}pts) vs "
+        f"{p2} (serve {serve_p2:.1%}, {pts_p2}pts)"
+    )
+    logger.info(
+        f"  Servicio: {prob_serve:.2%} | Ranking: {prob_rank:.2%} | "
+        f"Final: {p1} {prob_p1:.2%} / {p2} {prob_p2:.2%}"
+    )
 
     prob_map = {p1: prob_p1, p2: prob_p2}
 

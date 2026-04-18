@@ -2,7 +2,7 @@ from loguru import logger
 
 from config import SPORTS_TENNIS, TOURNAMENT_SURFACE, TOURNAMENT_TOUR, BANKROLL
 from src.data.odds_client import get_odds
-from src.data.tennis_data import download_atp_matches, download_wta_matches, calculate_player_stats
+from src.data.tennis_data import download_atp_matches, download_wta_matches, calculate_player_stats, get_player_rankings
 from src.models.tennis_engine import analyze_tennis_match
 
 
@@ -23,12 +23,16 @@ def run():
     atp_cache = {s: calculate_player_stats(atp_df, surface=s) for s in surfaces}
     wta_cache = {s: calculate_player_stats(wta_df, surface=s) for s in surfaces}
 
+    atp_rankings = get_player_rankings(atp_df)
+    wta_rankings = get_player_rankings(wta_df)
+
     all_picks = []
 
     for sport in SPORTS_TENNIS:
         surface = TOURNAMENT_SURFACE.get(sport, "Hard")
         tour = TOURNAMENT_TOUR.get(sport, "ATP")
-        stats_df = (atp_cache if tour == "ATP" else wta_cache)[surface]
+        stats_df  = (atp_cache    if tour == "ATP" else wta_cache)[surface]
+        rankings  = atp_rankings if tour == "ATP" else wta_rankings
 
         logger.info(f"\n--- {sport} | {tour} | Superficie: {surface} ---")
         matches = get_odds(sport)
@@ -40,7 +44,10 @@ def run():
         logger.info(f"{len(matches)} partido(s) encontrado(s)")
 
         for match in matches:
-            picks = analyze_tennis_match(match, stats_df, bankroll=BANKROLL, surface=surface, tour=tour)
+            picks = analyze_tennis_match(
+                match, stats_df, bankroll=BANKROLL,
+                surface=surface, tour=tour, rankings=rankings,
+            )
             all_picks.extend(picks)
 
     if all_picks:

@@ -51,6 +51,45 @@ def download_wta_matches(years: list = YEARS) -> pd.DataFrame:
     return _download_matches(BASE_URL_WTA, "wta", years)
 
 
+def get_player_rankings(df: pd.DataFrame) -> dict:
+    """
+    Extrae el ranking más reciente de cada jugador.
+    Devuelve dict: {player_name: {"rank": int, "points": int}}
+    """
+    if df.empty:
+        return {}
+
+    cols = ["winner_name", "winner_rank", "winner_rank_points",
+            "loser_name",  "loser_rank",  "loser_rank_points", "tourney_date"]
+
+    available = [c for c in cols if c in df.columns]
+    if len(available) < 4:
+        return {}
+
+    df = df[available].copy()
+    df["tourney_date"] = pd.to_numeric(df["tourney_date"], errors="coerce")
+    df = df.sort_values("tourney_date", ascending=False)
+
+    rankings = {}
+
+    for _, row in df.iterrows():
+        for name_col, rank_col, pts_col in [
+            ("winner_name", "winner_rank", "winner_rank_points"),
+            ("loser_name",  "loser_rank",  "loser_rank_points"),
+        ]:
+            if name_col not in df.columns:
+                continue
+            name = row[name_col]
+            if name not in rankings and pd.notna(row.get(rank_col)):
+                rankings[name] = {
+                    "rank":   int(row[rank_col]),
+                    "points": int(row[pts_col]) if pd.notna(row.get(pts_col)) else 0,
+                }
+
+    logger.info(f"Rankings extraídos: {len(rankings)} jugadores")
+    return rankings
+
+
 def calculate_player_stats(df: pd.DataFrame, surface: str = None) -> pd.DataFrame:
     """
     Calcula estadísticas de servicio por jugador.
