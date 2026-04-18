@@ -137,12 +137,15 @@ class TennisAPIClient:
             logger.info(f"api-tennis H2H: < 2 enfrentamientos para {p1} vs {p2}")
 
         # ---------- Forma reciente ----------
-        for key, results_field, form_key, is_first in [
+        for player_name, results_field, form_key, is_first in [
             (p1, "firstPlayerResults",  "form_p1", True),
             (p2, "secondPlayerResults", "form_p2", False),
         ]:
-            matches = result.get(results_field) or []
-            wins = self._parse_form(matches, is_first_player=True)
+            raw_matches = result.get(results_field) or []
+            # Log raw sample to help diagnose parsing issues
+            if raw_matches:
+                logger.debug(f"api-tennis {results_field} sample: {raw_matches[0]}")
+            wins = self._parse_form(raw_matches, is_first_player=is_first)
             if wins:
                 n = len(wins)
                 weights = [0.9 ** (n - 1 - i) for i in range(n)]
@@ -150,7 +153,7 @@ class TennisAPIClient:
                     sum(w * v for w, v in zip(weights, wins)) / sum(weights), 4
                 )
                 logger.info(
-                    f"api-tennis forma {key}: {sum(wins):.0f}V/{len(wins)}P "
+                    f"api-tennis forma {player_name}: {sum(wins):.0f}V/{len(wins)}P "
                     f"→ {out[form_key]:.0%} (decay)"
                 )
 
@@ -161,18 +164,29 @@ class TennisAPIClient:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _did_first_player_win(match: dict) -> bool:
+    def _winner_is_first(match: dict) -> bool | None:
         """
-        En el endpoint H2H, first_player_key es siempre nuestro p1.
-        El campo 'result' tiene formato 'sets_p1:sets_p2' (e.g. '3:1').
+        Determina si el primer jugador del partido ganó.
+        Maneja tres formatos posibles del campo event_winner:
+          1. Literal "First Player" / "Second Player"  (más común en estas APIs)
+          2. Nombre del jugador → comparar con first_player
+          3. Ausente → parsear marcador "sets_p1:sets_p2"
         """
-        # Preferir event_winner si está disponible
         winner = str(match.get("event_winner", "")).strip()
-        first  = str(match.get("first_player", "")).strip()
+        w_lower = winner.lower()
+
+        # Formato 1: literal "First Player" / "Second Player"
+        if "first" in w_lower and "player" in w_lower:
+            return True
+        if "second" in w_lower and "player" in w_lower:
+            return False
+
+        # Formato 2: nombre del ganador
+        first = str(match.get("first_player", match.get("event_first_player", ""))).strip()
         if winner and first:
             return normalize(winner) == normalize(first)
 
-        # Fallback: parsear marcador de sets
+        # Formato 3: marcador "3:1"
         result = str(match.get("result", ""))
         parts  = result.split(":")
         if len(parts) == 2:
@@ -180,36 +194,50 @@ class TennisAPIClient:
                 return int(parts[0]) > int(parts[1])
             except ValueError:
                 pass
-        return False
 
-    @staticmethod
-    def _parse_form(matches: list, is_first_player: bool = True) -> list[float]:
+        return None
+
+    @classmethod
+    def _did_first_player_win(cls, match: dict) -> bool:
+        result = cls._winner_is_first(match)
+        return bool(result)
+
+    @classmethod
+    def _parse_form(cls, matches: list, is_first_player: bool = True) -> list[float]:
         """
         Devuelve lista de 1.0 (victoria) / 0.0 (derrota) en orden cronológico.
-        is_first_player=True → el primer número del marcador corresponde al jugador.
+        is_first_player=True → la perspectiva del marcador es la del jugador que analizamos.
         """
         wins = []
         for m in matches:
-            winner = str(m.get("event_winner", "")).strip()
-            first  = str(m.get("event_first_player", "")).strip()
-
-            won = None
-            if winner and first:
-                won = normalize(winner) == normalize(first) if is_first_player \
-                    else normalize(winner) != normalize(first)
-            else:
-                result = str(m.get("result", ""))
-                parts  = result.split(":")
-                if len(parts) == 2:
-                    try:
-                        p1_sets = int(parts[0])
-                        p2_sets = int(parts[1])
-                        if p1_sets != p2_sets:
-                            won = (p1_sets > p2_sets) == is_first_player
-                    except ValueError:
-                        pass
-
-            if won is not None:
-                wins.append(1.0 if won else 0.0)
+            first_won = cls._winner_is_first(m)
+            if first_won is None:
+                continue
+            won = first_won if is_first_player else not first_won
+            wins.append(1.0 if won else 0.0)
 
         return wins
+
+    # ------------------------------------------------------------------
+    # Diagnóstico
+    # ------------------------------------------------------------------
+
+    def debug_h2h(self, p1: str, p2: str, tour: str, max_entries: int = 3):
+        """
+        Imprime el response crudo de get_H2H para ayudar a depurar el parsing.
+        Uso:  client.debug_h2h("Andrey Rublev", "Arthur Fils", "ATP")
+        """
+        import json
+        standings = self.get_rankings(tour)
+        key1 = self._find_key(p1, standings)
+        key2 = self._find_key(p2, standings)
+        print(f"\n=== debug_h2h: {p1} ({key1}) vs {p2} ({key2}) ===")
+        result = self._get("get_H2H", first_player_key=key1, second_player_key=key2)
+        if not result:
+            print("Sin respuesta de la API")
+            return
+        for section in ("H2H", "firstPlayerResults", "secondPlayerResults"):
+            entries = result.get(section) or []
+            print(f"\n-- {section} ({len(entries)} entradas) --")
+            for e in entries[:max_entries]:
+                print(json.dumps(e, ensure_ascii=False))
