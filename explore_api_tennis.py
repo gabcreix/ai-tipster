@@ -49,20 +49,44 @@ if __name__ == "__main__":
     show("get_leagues",   call("get_leagues"))
     show("get_countries", call("get_countries"))
 
-    # Fixtures — parámetros correctos: date_start / date_stop
-    show("get_fixtures (ATP, ayer→hoy)",
-         call("get_fixtures", event_type="ATP", date_start=yesterday, date_stop=today))
+    # Buscar partidos ATP/WTA Singles finalizados esta semana
+    all_fixtures = call("get_fixtures", event_type="ATP", date_start=week_ago, date_stop=today) or []
 
-    show("get_fixtures (ATP, semana)",
-         call("get_fixtures", event_type="ATP", date_start=week_ago, date_stop=today))
+    atp_singles = [
+        f for f in all_fixtures
+        if f.get("event_status") == "Finished"
+        and "Singles" in f.get("event_type_type", "")
+        and "Atp" in f.get("event_type_type", "")
+    ]
+    wta_singles = [
+        f for f in all_fixtures
+        if f.get("event_status") == "Finished"
+        and "Singles" in f.get("event_type_type", "")
+        and "Wta" in f.get("event_type_type", "")
+    ]
 
-    show("get_fixtures (WTA, semana)",
-         call("get_fixtures", event_type="WTA", date_start=week_ago, date_stop=today))
+    print(f"\nATP Singles finalizados esta semana: {len(atp_singles)}")
+    print(f"WTA Singles finalizados esta semana: {len(wta_singles)}")
 
-    # Livescore (singular)
-    show("get_livescore (ATP)", call("get_livescore", event_type="ATP"))
-    show("get_livescore (WTA)", call("get_livescore", event_type="WTA"))
+    # Inspeccionar statistics, scores y pointbypoint de los primeros 3 ATP
+    print("\n" + "="*60)
+    print("  DETALLE statistics / scores / pointbypoint")
+    print("="*60)
 
-    # Endpoints nuevos descubiertos en el error 404
-    show("get_events (ATP)",       call("get_events",      event_type="ATP"))
-    show("get_tournaments (ATP)",  call("get_tournaments", event_type="ATP"))
+    for match in atp_singles[:3]:
+        p1   = match["event_first_player"]
+        p2   = match["event_second_player"]
+        res  = match["event_final_result"]
+        ttype = match["event_type_type"]
+        print(f"\n--- {p1} vs {p2} ({res}) [{ttype}] ---")
+        print(f"  scores:      {json.dumps(match.get('scores'), ensure_ascii=False)}")
+        print(f"  statistics:  {json.dumps(match.get('statistics'), ensure_ascii=False)[:600]}")
+        print(f"  pointbypoint:{json.dumps(match.get('pointbypoint'), ensure_ascii=False)[:300]}")
+
+    # Tipos de eventos disponibles (para saber cómo filtrar)
+    print("\n" + "="*60)
+    print("  TIPOS DE EVENTOS (get_events)")
+    print("="*60)
+    events = call("get_events", event_type="ATP") or []
+    for e in events:
+        print(f"  key={e['event_type_key']:4d}  {e['event_type_type']}")
