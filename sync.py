@@ -21,6 +21,7 @@ import pandas as pd
 import requests
 from loguru import logger
 
+
 from src.data.database import (
     init_db, upsert_matches, get_match_history_counts,
 )
@@ -102,24 +103,59 @@ def print_summary():
         logger.info(f"  {r['source']:15s} {r['tour']:5s} {r['year']:6d} {r['matches']:>8d}")
 
 
-def run(years: list[int] = None, force: bool = False):
+def sync_sofascore(days_back: int = 2, force: bool = False) -> int:
+    """
+    Descarga partidos ATP/WTA de Sofascore de los últimos `days_back` días.
+    Persiste en match_history con source='sofascore'.
+    """
+    try:
+        from src.data.sofascore_client import fetch_matches
+    except ImportError as e:
+        logger.error(f"sofascore_client no disponible: {e}")
+        return 0
+
+    cache_key = f"sofascore_sync_{days_back}"
+    if force:
+        cache.invalidate(cache_key)
+
+    logger.info(f"Sincronizando Sofascore (últimos {days_back} días)…")
+    df = fetch_matches(days_back=days_back)
+
+    if df.empty:
+        logger.info("  Sofascore: sin partidos nuevos")
+        return 0
+
+    new_rows = 0
+    for tour in ("ATP", "WTA"):
+        sub = df[df["tour"] == tour] if "tour" in df.columns else pd.DataFrame()
+        if sub.empty:
+            continue
+        n = upsert_matches(sub, source="sofascore", tour=tour)
+        logger.info(f"  Sofascore {tour}: {len(sub)} partidos → {n} nuevos en DB")
+        new_rows += n
+
+    return new_rows
+
+
+def run(years: list[int] = None, force: bool = False, sofascore: bool = True):
     if years is None:
         years = DEFAULT_YEARS
 
     init_db()
 
     logger.info(f"=== Sync — años: {years} {'(force)' if force else ''} ===")
-    totals = sync_tml(years, force=force)
+    totals     = sync_tml(years, force=force)
     ongoing_new = sync_ongoing(force=force)
+    sf_new      = sync_sofascore(days_back=2, force=force) if sofascore else 0
 
-    total_new = sum(totals.values()) + ongoing_new
+    total_new = sum(totals.values()) + ongoing_new + sf_new
     logger.info(f"\n  Total nuevos partidos insertados: {total_new}")
     print_summary()
     return totals
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Sincroniza TML-Database → DB local")
+    parser = argparse.ArgumentParser(description="Sincroniza TML-Database + Sofascore → DB local")
     parser.add_argument(
         "--years", nargs="+", type=int,
         default=DEFAULT_YEARS,
@@ -129,5 +165,9 @@ if __name__ == "__main__":
         "--force", action="store_true",
         help="Invalida caché y re-descarga aunque los datos ya estén en caché",
     )
+    parser.add_argument(
+        "--no-sofascore", action="store_true",
+        help="Omitir la sincronización de Sofascore",
+    )
     args = parser.parse_args()
-    run(years=args.years, force=args.force)
+    run(years=args.years, force=args.force, sofascore=not args.no_sofascore)
