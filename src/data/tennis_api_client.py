@@ -267,6 +267,192 @@ class TennisAPIClient:
         return 1.0 if won else 0.0
 
     # ------------------------------------------------------------------
+    # Fixtures / resultados recientes
+    # ------------------------------------------------------------------
+
+    # Tipos de eventos de singles que nos interesan
+    _SINGLES_TYPES = frozenset({"Atp Singles", "Wta Singles"})
+
+    def get_recent_results(self, days_back: int = 7) -> "pd.DataFrame":
+        """
+        Devuelve partidos ATP/WTA Singles completados en los últimos `days_back` días
+        como DataFrame compatible con match_history (listo para upsert_matches).
+
+        Extrae estadísticas de servicio del campo `statistics`:
+          - serve_win_pct calculado desde "Service points won" o
+            derivado de "1st serve %", "1st serve points won", "2nd serve points won"
+          - Normalizado a base 100 para compatibilidad con calculate_player_stats()
+
+        Superficie obtenida de get_tournaments() (cacheado 24h).
+        """
+        import pandas as pd
+        from datetime import date, timedelta
+
+        today    = date.today()
+        d_start  = (today - timedelta(days=days_back)).isoformat()
+        d_stop   = today.isoformat()
+
+        cache_key = f"at_fixtures_{d_start}_{d_stop}"
+        cached = cache.load(cache_key)
+        if cached is not None:
+            return cached
+
+        raw = self._get("get_fixtures", date_start=d_start, date_stop=d_stop)
+        if not raw:
+            return pd.DataFrame()
+
+        # Mapa surface por torneo (cacheado 24h)
+        surface_map = self._get_surface_map()
+
+        records = []
+        for event in raw:
+            if event.get("event_status") != "Finished":
+                continue
+            if event.get("event_type_type") not in self._SINGLES_TYPES:
+                continue
+            row = self._parse_fixture(event, surface_map)
+            if row:
+                records.append(row)
+
+        df = pd.DataFrame(records) if records else pd.DataFrame()
+        logger.info(f"api-tennis fixtures: {len(df)} partidos ATP/WTA Singles ({d_start} → {d_stop})")
+        if not df.empty:
+            cache.save(cache_key, df, ttl_hours=6)
+        return df
+
+    def _get_surface_map(self) -> dict:
+        """Devuelve {tournament_key: surface} cacheado 24h."""
+        cached = cache.load("at_surface_map")
+        if cached is not None:
+            return cached
+
+        tours = self._get("get_tournaments", event_type="ATP") or []
+        surface_map = {}
+        for t in tours:
+            key  = t.get("tournament_key")
+            surf = str(t.get("tournament_sourface") or "").strip().capitalize()
+            if key and surf:
+                surface_map[int(key)] = surf
+
+        cache.save("at_surface_map", surface_map, ttl_hours=24)
+        return surface_map
+
+    def _parse_fixture(self, event: dict, surface_map: dict) -> dict | None:
+        """Convierte un evento de get_fixtures a una fila de match_history."""
+        import pandas as pd
+
+        p1_name = str(event.get("event_first_player",  "")).strip()
+        p2_name = str(event.get("event_second_player", "")).strip()
+        winner  = str(event.get("event_winner", "")).strip().lower()
+        p1_key  = event.get("first_player_key")
+        p2_key  = event.get("second_player_key")
+
+        if not p1_name or not p2_name:
+            return None
+        if "first" in winner:
+            winner_name, loser_name = p1_name, p2_name
+            winner_key,  loser_key  = p1_key,  p2_key
+        elif "second" in winner:
+            winner_name, loser_name = p2_name, p1_name
+            winner_key,  loser_key  = p2_key,  p1_key
+        else:
+            return None
+
+        tour = "ATP" if "Atp" in event.get("event_type_type", "") else "WTA"
+        t_key = int(event.get("tournament_key", 0) or 0)
+        surface = surface_map.get(t_key, "Hard")
+
+        stats_raw = event.get("statistics") or []
+        w_stats = self._parse_serve_stats(stats_raw, winner_key)
+        l_stats = self._parse_serve_stats(stats_raw, loser_key)
+
+        if not w_stats and not l_stats:
+            return None  # sin estadísticas, no tiene valor para el modelo
+
+        def norm(s: dict) -> tuple:
+            """Normaliza a base 100: svpt=100, 1stWon=serve_win_pct*100."""
+            swp = s.get("serve_win_pct")
+            if swp is None:
+                return None, None
+            return 100, round(swp * 100)
+
+        w_svpt, w_won = norm(w_stats)
+        l_svpt, l_won = norm(l_stats)
+
+        return {
+            "tourney_id":   f"at_{t_key}_{event.get('tournament_season', '')}",
+            "match_num":    int(event.get("event_key", 0)),
+            "tourney_date": int(str(event.get("event_date", "")).replace("-", "") or 0),
+            "tourney_name": event.get("tournament_name", ""),
+            "surface":      surface,
+            "tour":         tour,
+            "winner_name":  winner_name,
+            "loser_name":   loser_name,
+            "winner_rank":  None,
+            "loser_rank":   None,
+            "w_svpt":       w_svpt,
+            "w_1stIn":      None,
+            "w_1stWon":     w_won,
+            "w_2ndWon":     0 if w_won is not None else None,
+            "l_svpt":       l_svpt,
+            "l_1stIn":      None,
+            "l_1stWon":     l_won,
+            "l_2ndWon":     0 if l_won is not None else None,
+            "score":        event.get("event_final_result"),
+        }
+
+    @staticmethod
+    def _parse_serve_stats(stats: list, player_key) -> dict:
+        """
+        Extrae estadísticas de servicio de un jugador desde el array statistics.
+        Calcula serve_win_pct desde "Service points won" si está disponible;
+        si no, lo deriva de "1st serve percentage", "1st serve points won" y
+        "2nd serve points won".
+        """
+        def pct(val: str) -> float | None:
+            try:
+                return float(str(val).rstrip("%")) / 100
+            except (ValueError, TypeError):
+                return None
+
+        player_stats = [s for s in stats if str(s.get("player_key")) == str(player_key)]
+        if not player_stats:
+            return {}
+
+        data: dict = {}
+        for s in player_stats:
+            name = s.get("stat_name", "")
+            val  = s.get("stat_value")
+            if name == "Service points won":
+                data["serve_win_pct"] = pct(val)
+            elif name == "1st serve percentage":
+                data["first_pct"] = pct(val)
+            elif name == "1st serve points won":
+                data["first_won"] = pct(val)
+            elif name == "2nd serve points won":
+                data["second_won"] = pct(val)
+            elif name == "Aces":
+                try:
+                    data["aces"] = int(val)
+                except (ValueError, TypeError):
+                    pass
+            elif name == "Double Faults":
+                try:
+                    data["df"] = int(val)
+                except (ValueError, TypeError):
+                    pass
+
+        # Derivar serve_win_pct si no viene directamente
+        if data.get("serve_win_pct") is None:
+            fp = data.get("first_pct")
+            fw = data.get("first_won")
+            sw = data.get("second_won")
+            if fp is not None and fw is not None and sw is not None:
+                data["serve_win_pct"] = round(fp * fw + (1 - fp) * sw, 4)
+
+        return data
+
+    # ------------------------------------------------------------------
     # Diagnóstico
     # ------------------------------------------------------------------
 

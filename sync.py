@@ -103,6 +103,39 @@ def print_summary():
         logger.info(f"  {r['source']:15s} {r['tour']:5s} {r['year']:6d} {r['matches']:>8d}")
 
 
+def sync_api_tennis(days_back: int = 7) -> int:
+    """
+    Descarga partidos ATP/WTA Singles completados de api-tennis.com
+    (últimos `days_back` días) y persiste en match_history.
+    Usa la misma API key que el análisis de picks — sin configuración extra.
+    """
+    from config import TENNIS_API_KEY
+    if not TENNIS_API_KEY:
+        logger.info("TENNIS_API_KEY no configurado — omitiendo sync api-tennis fixtures")
+        return 0
+
+    from src.data.tennis_api_client import TennisAPIClient
+    client = TennisAPIClient(TENNIS_API_KEY)
+
+    logger.info(f"Sincronizando api-tennis fixtures (últimos {days_back} días)…")
+    df = client.get_recent_results(days_back=days_back)
+
+    if df.empty:
+        logger.info("  api-tennis fixtures: sin partidos nuevos")
+        return 0
+
+    new_rows = 0
+    for tour in ("ATP", "WTA"):
+        sub = df[df["tour"] == tour] if "tour" in df.columns else pd.DataFrame()
+        if sub.empty:
+            continue
+        n = upsert_matches(sub, source="api_tennis", tour=tour)
+        logger.info(f"  api-tennis {tour}: {len(sub)} partidos → {n} nuevos en DB")
+        new_rows += n
+
+    return new_rows
+
+
 def sync_sofascore(days_back: int = 2, force: bool = False) -> int:
     """
     Descarga partidos ATP/WTA de Sofascore de los últimos `days_back` días.
@@ -151,11 +184,12 @@ def run(years: list[int] = None, force: bool = False, sofascore: bool = True):
     init_db()
 
     logger.info(f"=== Sync — años: {years} {'(force)' if force else ''} ===")
-    totals     = sync_tml(years, force=force)
+    totals      = sync_tml(years, force=force)
     ongoing_new = sync_ongoing(force=force)
+    at_new      = sync_api_tennis(days_back=7)
     sf_new      = sync_sofascore(days_back=2, force=force) if sofascore else 0
 
-    total_new = sum(totals.values()) + ongoing_new + sf_new
+    total_new = sum(totals.values()) + ongoing_new + at_new + sf_new
     logger.info(f"\n  Total nuevos partidos insertados: {total_new}")
     print_summary()
     return totals
