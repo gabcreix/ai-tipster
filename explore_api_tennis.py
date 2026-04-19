@@ -49,19 +49,20 @@ if __name__ == "__main__":
     show("get_leagues",   call("get_leagues"))
     show("get_countries", call("get_countries"))
 
-    # Fixtures / resultados
-    show("get_fixtures (ATP, hoy)",
-         call("get_fixtures", event_type="ATP", from_date=today, to_date=today))
+    # Fixtures — parámetros correctos: date_start / date_stop
+    show("get_fixtures (ATP, ayer→hoy)",
+         call("get_fixtures", event_type="ATP", date_start=yesterday, date_stop=today))
 
-    show("get_fixtures (ATP, ayer)",
-         call("get_fixtures", event_type="ATP", from_date=yesterday, to_date=yesterday))
+    show("get_fixtures (ATP, semana)",
+         call("get_fixtures", event_type="ATP", date_start=week_ago, date_stop=today))
 
-    show("get_fixtures (ATP, última semana)",
-         call("get_fixtures", event_type="ATP", from_date=week_ago, to_date=today))
+    show("get_fixtures (WTA, semana)",
+         call("get_fixtures", event_type="WTA", date_start=week_ago, date_stop=today))
 
-    show("get_fixtures (WTA, última semana)",
-         call("get_fixtures", event_type="WTA", from_date=week_ago, to_date=today))
+    # Livescore (singular)
+    show("get_livescore (ATP)", call("get_livescore", event_type="ATP"))
+    show("get_livescore (WTA)", call("get_livescore", event_type="WTA"))
 
-    # Livescores
-    show("get_livescores (ATP)", call("get_livescores", event_type="ATP"))
-    show("get_livescores (WTA)", call("get_livescores", event_type="WTA"))
+    # Endpoints nuevos descubiertos en el error 404
+    show("get_events (ATP)",       call("get_events",      event_type="ATP"))
+    show("get_tournaments (ATP)",  call("get_tournaments", event_type="ATP"))
