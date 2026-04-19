@@ -20,6 +20,10 @@ from loguru import logger
 
 import pandas as pd
 import requests
+import urllib3
+
+# Entornos corporativos con proxy SSL interceptor — suprimir warnings
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 # cloudscraper gestiona automáticamente el challenge de Cloudflare
 try:
@@ -27,10 +31,11 @@ try:
     _scraper = cloudscraper.create_scraper(
         browser={"browser": "chrome", "platform": "windows", "mobile": False}
     )
+    _scraper.verify = False   # proxy corporativo con CA propia
     logger.info("Sofascore: usando cloudscraper (Cloudflare bypass)")
 except ImportError:
     _scraper = None
-    logger.warning("cloudscraper no instalado — instala con: pip install cloudscraper")
+    logger.warning("cloudscraper no instalado — instala con: python -m pip install cloudscraper")
 
 BASE     = "https://api.sofascore.com/api/v1"
 HOME_URL = "https://www.sofascore.com"
@@ -71,7 +76,7 @@ def _init_session() -> requests.Session:
     s = requests.Session()
     s.headers.update(HEADERS)
     try:
-        resp = s.get(HOME_URL, timeout=15, allow_redirects=True)
+        resp = s.get(HOME_URL, timeout=15, allow_redirects=True, verify=False)
         logger.debug(f"Sofascore home: HTTP {resp.status_code}, cookies={list(resp.cookies.keys())}")
     except Exception as e:
         logger.warning(f"No se pudo inicializar sesión Sofascore: {e}")
@@ -97,9 +102,9 @@ def _get(path: str, retries: int = 2) -> dict | None:
     for attempt in range(retries + 1):
         try:
             if _scraper is not None:
-                r = _scraper.get(url, timeout=15)
+                r = _scraper.get(url, timeout=15, verify=False)
             else:
-                r = _init_session().get(url, timeout=15)
+                r = _init_session().get(url, timeout=15, verify=False)
 
             if r.status_code == 200:
                 return r.json()
