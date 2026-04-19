@@ -8,11 +8,77 @@ from src.data.database import get_pending_picks, update_result, get_roi_summary
 COMMANDS = {"w": "won", "l": "lost", "v": "void", "s": None}
 
 
+def auto_mark_from_history() -> int:
+    """
+    Intenta marcar picks pendientes automáticamente cotejando con match_history.
+    Devuelve el número de picks marcados.
+    """
+    from datetime import datetime
+    from src.data.database import load_matches_from_db
+    from src.data.name_mapper import map_name, normalize
+
+    picks = get_pending_picks()
+    if not picks:
+        return 0
+
+    current_year = datetime.now().year
+    results_df = load_matches_from_db(years=[current_year - 1, current_year])
+    if results_df.empty:
+        return 0
+
+    known_names = (
+        results_df["winner_name"].dropna().tolist()
+        + results_df["loser_name"].dropna().tolist()
+    )
+
+    marked = 0
+    for pick in picks:
+        p1      = pick["player1"]
+        p2      = pick["player2"]
+        outcome = pick["outcome"]
+        pick_date = int(str(pick["created_at"])[:10].replace("-", ""))
+
+        # Solo partidos jugados después de crear el pick
+        candidates = results_df[results_df["tourney_date"] >= pick_date]
+        if candidates.empty:
+            continue
+
+        mp1 = map_name(p1, known_names) or p1
+        mp2 = map_name(p2, known_names) or p2
+
+        match_rows = candidates[
+            ((candidates["winner_name"] == mp1) | (candidates["loser_name"] == mp1)) &
+            ((candidates["winner_name"] == mp2) | (candidates["loser_name"] == mp2))
+        ]
+        if match_rows.empty:
+            continue
+
+        row    = match_rows.sort_values("tourney_date").iloc[-1]
+        winner = row["winner_name"]
+        loser  = row["loser_name"]
+
+        m_outcome = map_name(outcome, [winner, loser]) or outcome
+        if normalize(m_outcome) == normalize(str(winner)):
+            update_result(pick["id"], "won")
+            marked += 1
+            logger.info(f"  Auto: WON — {outcome} ({p1} vs {p2})")
+        elif normalize(m_outcome) == normalize(str(loser)):
+            update_result(pick["id"], "lost")
+            marked += 1
+            logger.info(f"  Auto: LOST — {outcome} ({p1} vs {p2})")
+
+    return marked
+
+
 def _fmt_tournament(t: str) -> str:
     return t.replace("tennis_", "").replace("_", " ").title()
 
 
 def run():
+    auto = auto_mark_from_history()
+    if auto:
+        print(f"\n  {auto} pick(s) marcados automáticamente desde historial.")
+
     picks = get_pending_picks()
 
     if not picks:

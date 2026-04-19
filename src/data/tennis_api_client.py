@@ -111,7 +111,10 @@ class TennisAPIClient:
         Usa un único endpoint get_H2H que devuelve H2H + últimos resultados
         de cada jugador por separado.
         """
-        default = {"h2h_prob_p1": 0.5, "form_p1": 0.5, "form_p2": 0.5, "h2h_matches": 0}
+        default = {
+            "h2h_prob_p1": 0.5, "form_p1": 0.5, "form_p2": 0.5, "h2h_matches": 0,
+            "form_p1_found": False, "form_p2_found": False,
+        }
 
         standings = self.get_rankings(tour)
         if not standings:
@@ -165,6 +168,7 @@ class TennisAPIClient:
                 out[form_key] = round(
                     sum(w * v for w, v in zip(weights, wins)) / sum(weights), 4
                 )
+                out[form_key + "_found"] = True
                 logger.info(
                     f"api-tennis forma {player_name}: {sum(wins):.0f}V/{len(wins)}P "
                     f"→ {out[form_key]:.0%} (decay)"

@@ -14,6 +14,7 @@ El script es idempotente: usa INSERT OR IGNORE, por lo que relanzarlo
 no genera duplicados. Ideal para cron diario o llamada desde scheduler.py.
 """
 import argparse
+import time
 from datetime import datetime
 from io import StringIO
 
@@ -48,16 +49,24 @@ def sync_ongoing(force: bool = False) -> int:
     else:
         url = f"{BASE_URL_TML}/ongoing_tourneys.csv"
         logger.info("Descargando ongoing_tourneys.csv...")
-        try:
-            r = requests.get(url, timeout=15)
-            if r.status_code != 200:
-                logger.warning(f"  ongoing_tourneys: HTTP {r.status_code}")
-                return 0
-            df = pd.read_csv(StringIO(r.text))
-            cache.save(cache_key, df, ttl_hours=1)
-            logger.info(f"  {len(df)} partidos en ongoing_tourneys")
-        except Exception as e:
-            logger.error(f"  Error descargando ongoing_tourneys: {e}")
+        df = None
+        for attempt in range(4):
+            try:
+                r = requests.get(url, timeout=15)
+                if r.status_code == 200:
+                    df = pd.read_csv(StringIO(r.text))
+                    cache.save(cache_key, df, ttl_hours=1)
+                    logger.info(f"  {len(df)} partidos en ongoing_tourneys")
+                    break
+                else:
+                    logger.warning(f"  ongoing_tourneys: HTTP {r.status_code} (intento {attempt+1}/4)")
+            except Exception as e:
+                logger.error(f"  Error descargando ongoing_tourneys (intento {attempt+1}/4): {e}")
+            if attempt < 3:
+                wait = 2 ** (attempt + 1)
+                logger.info(f"  Reintentando en {wait}s...")
+                time.sleep(wait)
+        if df is None:
             return 0
 
     new_rows = upsert_matches(df, source="tml_ongoing", tour="ATP")

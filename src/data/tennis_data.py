@@ -1,3 +1,4 @@
+import time
 import pandas as pd
 import requests
 import os
@@ -50,22 +51,30 @@ def _download_matches(base_url: str, prefix: str, years: list) -> pd.DataFrame:
 def _download_tml(years: list) -> pd.DataFrame:
     """
     Descarga partidos ATP de TML-Database (2025+).
-    Mismo formato que JeffSackmann.
+    Mismo formato que JeffSackmann. Reintentos con backoff exponencial.
     """
     dfs = []
     for year in years:
         url = f"{BASE_URL_TML}/{year}.csv"
         logger.info(f"Descargando TML-Database ATP {year}...")
-        try:
-            response = requests.get(url, timeout=15)
-            if response.status_code == 200:
-                df = pd.read_csv(StringIO(response.text))
-                dfs.append(df)
-                logger.info(f"  {len(df)} partidos descargados (TML {year})")
-            else:
-                logger.warning(f"  Error {response.status_code} para TML {year}")
-        except Exception as e:
-            logger.error(f"  Fallo descargando TML {year}: {e}")
+        df_year = None
+        for attempt in range(4):
+            try:
+                response = requests.get(url, timeout=15)
+                if response.status_code == 200:
+                    df_year = pd.read_csv(StringIO(response.text))
+                    logger.info(f"  {len(df_year)} partidos descargados (TML {year})")
+                    break
+                else:
+                    logger.warning(f"  Error {response.status_code} TML {year} (intento {attempt+1}/4)")
+            except Exception as e:
+                logger.error(f"  Fallo TML {year} (intento {attempt+1}/4): {e}")
+            if attempt < 3:
+                wait = 2 ** (attempt + 1)
+                logger.info(f"  Reintentando en {wait}s...")
+                time.sleep(wait)
+        if df_year is not None:
+            dfs.append(df_year)
     if not dfs:
         return pd.DataFrame()
     full = pd.concat(dfs, ignore_index=True)
@@ -88,10 +97,10 @@ def download_atp_matches(years: list = YEARS, include_recent: bool = True) -> pd
     df = _download_matches(BASE_URL_ATP, "atp", years)
 
     if include_recent and recent_years:
-        tml_df = _download_tml(recent_years)
+        tml_df = download_tml_atp(recent_years)  # match_history → caché → HTTP
         if not tml_df.empty:
             df = pd.concat([df, tml_df], ignore_index=True) if not df.empty else tml_df
-            logger.info(f"ATP total con TML-Database: {len(df)} partidos")
+            logger.info(f"ATP total con datos recientes: {len(df)} partidos")
 
     if not df.empty:
         cache.save(key, df, ttl_hours=4)
@@ -134,6 +143,15 @@ def download_wta_matches(years: list = YEARS) -> pd.DataFrame:
     if cached is not None:
         return cached
     df = _download_matches(BASE_URL_WTA, "wta", years)
+    # Enriquecer con partidos WTA recientes de match_history (api-tennis 2025+)
+    try:
+        from src.data.database import load_matches_from_db
+        wta_recent = load_matches_from_db(years=[2025, 2026], tour="WTA")
+        if not wta_recent.empty:
+            df = pd.concat([df, wta_recent], ignore_index=True) if not df.empty else wta_recent
+            logger.info(f"WTA: +{len(wta_recent)} partidos recientes (match_history)")
+    except Exception:
+        pass
     if not df.empty:
         cache.save(key, df, ttl_hours=12)
     return df
@@ -288,7 +306,12 @@ def calculate_recent_form(df: pd.DataFrame, surface: str = None, n_matches: int 
         player_df = df[(df["winner_name"] == player) | (df["loser_name"] == player)]
         if surface_key:
             surf_df = player_df[player_df["surface"].str.lower() == surface_key]
-            use_df = surf_df if len(surf_df) >= 5 else player_df
+            if len(surf_df) >= 3:
+                use_df = surf_df
+            else:
+                if len(surf_df) > 0:
+                    logger.debug(f"  {player}: solo {len(surf_df)} partido(s) en {surface_key}, usando todas las superficies")
+                use_df = player_df
         else:
             use_df = player_df
 

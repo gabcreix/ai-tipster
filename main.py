@@ -1,7 +1,7 @@
 from loguru import logger
 
 from config import SPORTS_TENNIS, TOURNAMENT_SURFACE, TOURNAMENT_TOUR, BANKROLL, TENNIS_API_KEY
-from src.data.odds_client import get_odds
+from src.data.odds_client import get_odds, get_available_tennis_sports
 from src.data.tennis_data import (
     download_atp_matches, download_wta_matches,
     calculate_player_stats, get_current_rankings,
@@ -23,6 +23,15 @@ def run():
 
     logger.info("Descargando datos históricos WTA...")
     wta_df = download_wta_matches()
+    import pandas as _pd
+    try:
+        from src.data.database import load_matches_from_db as _load_mh
+        _wta_recent = _load_mh(years=[2025, 2026], tour="WTA")
+        if not _wta_recent.empty:
+            wta_df = _pd.concat([wta_df, _wta_recent], ignore_index=True)
+            logger.info(f"WTA enriquecido: +{len(_wta_recent)} partidos de match_history")
+    except Exception as _e:
+        logger.warning(f"match_history WTA no disponible: {_e}")
 
     if atp_df.empty and wta_df.empty:
         logger.error("Sin datos ATP ni WTA. Abortando.")
@@ -61,9 +70,16 @@ def run():
 
     all_picks = []
 
-    for sport in SPORTS_TENNIS:
-        surface     = TOURNAMENT_SURFACE.get(sport, "Hard")
-        tour        = TOURNAMENT_TOUR.get(sport, "ATP")
+    active_tennis = get_available_tennis_sports()
+    sports_to_analyze = active_tennis if active_tennis else SPORTS_TENNIS
+    if active_tennis:
+        new_sports = [s for s in active_tennis if s not in SPORTS_TENNIS]
+        if new_sports:
+            logger.info(f"Torneos nuevos descubiertos: {new_sports}")
+
+    for sport in sports_to_analyze:
+        surface = TOURNAMENT_SURFACE.get(sport, "Hard")
+        tour    = TOURNAMENT_TOUR.get(sport, "WTA" if "wta" in sport.lower() else "ATP")
         stats_df    = (atp_cache    if tour == "ATP" else wta_cache)[surface]
         rankings    = (atp_rankings if tour == "ATP" else wta_rankings)
         recent_form = (atp_form     if tour == "ATP" else wta_form)[surface]
@@ -82,15 +98,23 @@ def run():
             p1 = match["home_team"]
             p2 = match["away_team"]
 
-            # Sobreescribir forma y H2H con datos en tiempo real si disponemos del cliente
-            match_form  = recent_form
-            match_h2h   = h2h_data
+            # Enriquecer forma y H2H con datos en tiempo real (sin reemplazar datos históricos buenos)
+            match_form = recent_form
+            match_h2h  = h2h_data
             if api_client:
                 live = api_client.get_match_live_data(p1, p2, tour)
-                # Construir dicts pequeños con los nombres exactos del partido
-                match_form = {p1: live["form_p1"], p2: live["form_p2"]}
-                match_h2h  = {p1: {p2: live["h2h_prob_p1"]},
-                               p2: {p1: round(1 - live["h2h_prob_p1"], 4)}}
+                # Solo actualizar la forma si api-tennis encontró el jugador
+                if live.get("form_p1_found"):
+                    match_form = {**match_form, p1: live["form_p1"]}
+                if live.get("form_p2_found"):
+                    match_form = {**match_form, p2: live["form_p2"]}
+                # Solo sobreescribir H2H si hay enfrentamientos directos reales
+                if live["h2h_matches"] > 0:
+                    match_h2h = {
+                        **match_h2h,
+                        p1: {**match_h2h.get(p1, {}), p2: live["h2h_prob_p1"]},
+                        p2: {**match_h2h.get(p2, {}), p1: round(1 - live["h2h_prob_p1"], 4)},
+                    }
 
             picks = analyze_tennis_match(
                 match, stats_df,

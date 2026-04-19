@@ -1,6 +1,33 @@
 import requests
 from loguru import logger
-from config import ODDS_API_KEY, BASE_URL_ODDS, SPORTS, BOOKMAKERS
+from config import ODDS_API_KEY, BASE_URL_ODDS, SPORTS, BOOKMAKERS, SPORTS_TENNIS
+
+
+def get_available_tennis_sports() -> list[str]:
+    """
+    Devuelve los sport_keys de tenis activos en the-odds-api.
+    Un sport es "activo" cuando tiene partidos con odds disponibles ahora mismo.
+    Fallback: SPORTS_TENNIS de config si la API no responde.
+    """
+    if not ODDS_API_KEY:
+        return list(SPORTS_TENNIS)
+    url = f"{BASE_URL_ODDS}/sports"
+    params = {"apiKey": ODDS_API_KEY}
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        if r.status_code != 200:
+            logger.warning(f"Sports API: HTTP {r.status_code} — usando SPORTS_TENNIS de config")
+            return list(SPORTS_TENNIS)
+        active = [
+            s["key"] for s in r.json()
+            if "tennis" in s.get("key", "").lower()
+            and s.get("active", False)
+        ]
+        logger.info(f"Torneos de tenis activos: {len(active)}")
+        return active
+    except Exception as e:
+        logger.error(f"Error obteniendo sports activos: {e}")
+        return list(SPORTS_TENNIS)
 
 
 def get_odds(sport: str) -> list:
