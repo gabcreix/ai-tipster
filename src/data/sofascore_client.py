@@ -14,6 +14,7 @@ Normalización de serve stats:
   El umbral mínimo de 500 puntos en calculate_player_stats() equivale
   a >= 5 partidos Sofascore por superficie.
 """
+import ssl
 import time
 from datetime import datetime, timedelta, timezone
 from loguru import logger
@@ -21,17 +22,38 @@ from loguru import logger
 import pandas as pd
 import requests
 import urllib3
+from requests.adapters import HTTPAdapter
+from urllib3.poolmanager import PoolManager
 
 # Entornos corporativos con proxy SSL interceptor — suprimir warnings
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+
+class _NoVerifyAdapter(HTTPAdapter):
+    """Adaptador que deshabilita verificación SSL (proxy corporativo)."""
+    def init_poolmanager(self, connections, maxsize, block=False, **kwargs):
+        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        ctx.check_hostname = False
+        ctx.verify_mode    = ssl.CERT_NONE
+        self.poolmanager   = PoolManager(
+            num_pools=connections, maxsize=maxsize, block=block, ssl_context=ctx,
+        )
+
+
+def _apply_no_verify(session):
+    session.mount("https://", _NoVerifyAdapter())
+    session.verify = False
+    return session
+
+
 # cloudscraper gestiona automáticamente el challenge de Cloudflare
 try:
     import cloudscraper
-    _scraper = cloudscraper.create_scraper(
-        browser={"browser": "chrome", "platform": "windows", "mobile": False}
+    _scraper = _apply_no_verify(
+        cloudscraper.create_scraper(
+            browser={"browser": "chrome", "platform": "windows", "mobile": False}
+        )
     )
-    _scraper.verify = False   # proxy corporativo con CA propia
     logger.info("Sofascore: usando cloudscraper (Cloudflare bypass)")
 except ImportError:
     _scraper = None
@@ -73,10 +95,10 @@ def _init_session() -> requests.Session:
     global _session
     if _session is not None:
         return _session
-    s = requests.Session()
+    s = _apply_no_verify(requests.Session())
     s.headers.update(HEADERS)
     try:
-        resp = s.get(HOME_URL, timeout=15, allow_redirects=True, verify=False)
+        resp = s.get(HOME_URL, timeout=15, allow_redirects=True)
         logger.debug(f"Sofascore home: HTTP {resp.status_code}, cookies={list(resp.cookies.keys())}")
     except Exception as e:
         logger.warning(f"No se pudo inicializar sesión Sofascore: {e}")
@@ -102,9 +124,9 @@ def _get(path: str, retries: int = 2) -> dict | None:
     for attempt in range(retries + 1):
         try:
             if _scraper is not None:
-                r = _scraper.get(url, timeout=15, verify=False)
+                r = _scraper.get(url, timeout=15)
             else:
-                r = _init_session().get(url, timeout=15, verify=False)
+                r = _init_session().get(url, timeout=15)
 
             if r.status_code == 200:
                 return r.json()
