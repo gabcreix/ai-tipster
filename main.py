@@ -28,7 +28,8 @@ def run():
         from src.data.database import load_matches_from_db as _load_mh
         _wta_recent = _load_mh(years=[2025, 2026], tour="WTA")
         if not _wta_recent.empty:
-            wta_df = _pd.concat([wta_df, _wta_recent], ignore_index=True)
+            common = [c for c in _wta_recent.columns if c in wta_df.columns]
+            wta_df = _pd.concat([wta_df, _wta_recent[common]], ignore_index=True)
             logger.info(f"WTA enriquecido: +{len(_wta_recent)} partidos de match_history")
     except Exception as _e:
         logger.warning(f"match_history WTA no disponible: {_e}")

@@ -148,6 +148,8 @@ def download_wta_matches(years: list = YEARS) -> pd.DataFrame:
         from src.data.database import load_matches_from_db
         wta_recent = load_matches_from_db(years=[2025, 2026], tour="WTA")
         if not wta_recent.empty:
+            common = [c for c in wta_recent.columns if c in df.columns] if not df.empty else list(wta_recent.columns)
+            wta_recent = wta_recent[common]
             df = pd.concat([df, wta_recent], ignore_index=True) if not df.empty else wta_recent
             logger.info(f"WTA: +{len(wta_recent)} partidos recientes (match_history)")
     except Exception:
