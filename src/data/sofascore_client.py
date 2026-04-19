@@ -105,6 +105,10 @@ def _init_session() -> requests.Session:
     _session = s
     return _session
 
+class _SofascoreUnavailable(Exception):
+    """Lanzada cuando Sofascore devuelve 403 persistente (proxy corporativo)."""
+
+
 SURFACE_MAP = {
     "CLAY":         "Clay",
     "HARD":         "Hard",
@@ -137,11 +141,17 @@ def _get(path: str, retries: int = 2) -> dict | None:
                 continue
             if r.status_code == 404:
                 return None
+            if r.status_code == 403:
+                if attempt == 0:
+                    time.sleep(3)
+                    continue
+                logger.warning(
+                    f"Sofascore {path}: HTTP 403 — Cloudflare bloqueó la conexión. "
+                    "Si estás en una red corporativa con proxy HTTPS, Sofascore no "
+                    "es accesible. El sync continuará sin datos de Sofascore."
+                )
+                raise _SofascoreUnavailable()
             logger.warning(f"Sofascore {path}: HTTP {r.status_code}")
-            if r.status_code == 403 and attempt == 0:
-                # Reintentar tras una pausa corta (puede ser rate-limit temporal)
-                time.sleep(3)
-                continue
             return None
         except Exception as e:
             logger.error(f"Sofascore {path}: {e}")

@@ -119,7 +119,14 @@ def sync_sofascore(days_back: int = 2, force: bool = False) -> int:
         cache.invalidate(cache_key)
 
     logger.info(f"Sincronizando Sofascore (últimos {days_back} días)…")
-    df = fetch_matches(days_back=days_back)
+    try:
+        df = fetch_matches(days_back=days_back)
+    except Exception as e:
+        if "SofascoreUnavailable" in type(e).__name__ or "403" in str(e):
+            logger.warning("  Sofascore no disponible (proxy corporativo) — omitiendo")
+        else:
+            logger.error(f"  Sofascore error inesperado: {e}")
+        return 0
 
     if df.empty:
         logger.info("  Sofascore: sin partidos nuevos")
