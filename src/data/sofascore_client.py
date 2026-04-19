@@ -21,7 +21,19 @@ from loguru import logger
 import pandas as pd
 import requests
 
-BASE = "https://api.sofascore.com/api/v1"
+# cloudscraper gestiona automáticamente el challenge de Cloudflare
+try:
+    import cloudscraper
+    _scraper = cloudscraper.create_scraper(
+        browser={"browser": "chrome", "platform": "windows", "mobile": False}
+    )
+    logger.info("Sofascore: usando cloudscraper (Cloudflare bypass)")
+except ImportError:
+    _scraper = None
+    logger.warning("cloudscraper no instalado — instala con: pip install cloudscraper")
+
+BASE     = "https://api.sofascore.com/api/v1"
+HOME_URL = "https://www.sofascore.com"
 
 HEADERS = {
     "User-Agent": (
@@ -29,14 +41,42 @@ HEADERS = {
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept": "*/*",
+    "Accept": "application/json, text/plain, */*",
     "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
     "Referer": "https://www.sofascore.com/",
     "Origin": "https://www.sofascore.com",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache",
+    "sec-ch-ua": '"Google Chrome";v="124", "Chromium";v="124", "Not-A.Brand";v="99"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
     "sec-fetch-dest": "empty",
     "sec-fetch-mode": "cors",
     "sec-fetch-site": "same-site",
 }
+
+# Sesión requests para fallback (recoge cookies al inicializarse)
+_session: requests.Session | None = None
+
+
+def _init_session() -> requests.Session:
+    """
+    Crea una sesión requests visitando la página principal de Sofascore
+    para obtener cookies de sesión (cf_clearance, etc.).
+    """
+    global _session
+    if _session is not None:
+        return _session
+    s = requests.Session()
+    s.headers.update(HEADERS)
+    try:
+        resp = s.get(HOME_URL, timeout=15, allow_redirects=True)
+        logger.debug(f"Sofascore home: HTTP {resp.status_code}, cookies={list(resp.cookies.keys())}")
+    except Exception as e:
+        logger.warning(f"No se pudo inicializar sesión Sofascore: {e}")
+    _session = s
+    return _session
 
 SURFACE_MAP = {
     "CLAY":         "Clay",
@@ -56,7 +96,11 @@ def _get(path: str, retries: int = 2) -> dict | None:
     url = f"{BASE}{path}"
     for attempt in range(retries + 1):
         try:
-            r = requests.get(url, headers=HEADERS, timeout=12)
+            if _scraper is not None:
+                r = _scraper.get(url, timeout=15)
+            else:
+                r = _init_session().get(url, timeout=15)
+
             if r.status_code == 200:
                 return r.json()
             if r.status_code == 429:
@@ -67,6 +111,10 @@ def _get(path: str, retries: int = 2) -> dict | None:
             if r.status_code == 404:
                 return None
             logger.warning(f"Sofascore {path}: HTTP {r.status_code}")
+            if r.status_code == 403 and attempt == 0:
+                # Reintentar tras una pausa corta (puede ser rate-limit temporal)
+                time.sleep(3)
+                continue
             return None
         except Exception as e:
             logger.error(f"Sofascore {path}: {e}")
