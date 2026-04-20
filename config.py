@@ -19,6 +19,8 @@ TOURNAMENT_SURFACE = {
     "tennis_atp_barcelona_open": "Clay",
     "tennis_atp_munich":         "Clay",
     "tennis_wta_stuttgart_open": "Clay",
+    "tennis_atp_madrid_open":    "Clay",
+    "tennis_wta_madrid_open":    "Clay",
 }
 
 # Circuito por torneo
@@ -26,13 +28,15 @@ TOURNAMENT_TOUR = {
     "tennis_atp_barcelona_open": "ATP",
     "tennis_atp_munich":         "ATP",
     "tennis_wta_stuttgart_open": "WTA",
+    "tennis_atp_madrid_open":    "ATP",
+    "tennis_wta_madrid_open":    "WTA",
 }
 
 # Bankroll inicial
 BANKROLL = 1000
 
 # Casas
-BOOKMAKERS = ["betfair", "bet365", "unibet", "williamhill", "bwin"]
+BOOKMAKERS = ["betfair", "bet365", "williamhill", "bwin"]
 
 # Valor
 MIN_EV_THRESHOLD = 0.03
