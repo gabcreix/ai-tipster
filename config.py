@@ -32,7 +32,7 @@ TOURNAMENT_TOUR = {
 BANKROLL = 1000
 
 # Casas
-BOOKMAKERS = ["pinnacle", "betfair", "bet365", "unibet"]
+BOOKMAKERS = ["betfair", "bet365", "unibet", "williamhill", "bwin"]
 
 # Valor
 MIN_EV_THRESHOLD = 0.03
