@@ -145,6 +145,66 @@ def sync_api_tennis(days_back: int = 7) -> int:
     return new_rows
 
 
+def sync_jeffsackmann(
+    years: list[int] = None,
+    tours: list[str] = None,
+    force: bool = False,
+) -> dict[str, int]:
+    """
+    Descarga datos históricos JeffSackmann (por defecto ATP+WTA 2022-2024) y
+    los persiste en match_history. Idempotente: INSERT OR IGNORE.
+
+    Tras ejecutar esto una vez, main.py leerá estos años de DB en vez de HTTP.
+    Usar también para añadir años anteriores para backtesting:
+        python sync.py --backfill 2018 2019 2020 2021
+    """
+    from src.data.tennis_data import _download_matches, BASE_URL_ATP, BASE_URL_WTA
+    from src.data.database import get_match_history_counts
+
+    if years is None:
+        years = [2022, 2023, 2024]
+    if tours is None:
+        tours = ["ATP", "WTA"]
+
+    counts = {
+        (r["tour"], r["year"]): r["matches"]
+        for r in get_match_history_counts()
+        if r["source"] == "jeffsackmann"
+    }
+
+    totals: dict[str, int] = {}
+    for tour in tours:
+        base_url = BASE_URL_ATP if tour == "ATP" else BASE_URL_WTA
+        prefix   = "atp"       if tour == "ATP" else "wta"
+
+        years_to_fetch = years if force else [
+            y for y in years if counts.get((tour, y), 0) == 0
+        ]
+
+        if not years_to_fetch:
+            logger.info(f"JeffSackmann {tour}: todos los años ya en DB — sin cambios")
+            totals[tour] = 0
+            continue
+
+        logger.info(f"Backfill JeffSackmann {tour} {years_to_fetch}...")
+        df = _download_matches(base_url, prefix, years_to_fetch)
+
+        if df.empty:
+            logger.warning(f"  JeffSackmann {tour}: sin datos descargados")
+            totals[tour] = 0
+            continue
+
+        new_rows = upsert_matches(df, source="jeffsackmann", tour=tour)
+        logger.info(f"  JeffSackmann {tour}: {len(df)} partidos → {new_rows} nuevos en DB")
+        totals[tour] = new_rows
+
+        # Invalida caché de disco para que main.py lea de DB en el próximo run
+        cache.invalidate(f"{'atp' if tour == 'ATP' else 'wta'}_matches_{min(years)}_{max(years)}")
+        cache.invalidate(f"atp_matches_{min(years)}_{max(years)}_recent")
+
+    return totals
+
+
 def sync_sofascore(days_back: int = 2, force: bool = False) -> int:
     """
     Descarga partidos ATP/WTA de Sofascore de los últimos `days_back` días.
@@ -209,7 +269,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--years", nargs="+", type=int,
         default=DEFAULT_YEARS,
-        help=f"Años a sincronizar (defecto: {DEFAULT_YEARS})",
+        help=f"Años a sincronizar con TML-Database (defecto: {DEFAULT_YEARS})",
     )
     parser.add_argument(
         "--force", action="store_true",
@@ -219,5 +279,31 @@ if __name__ == "__main__":
         "--no-sofascore", action="store_true",
         help="Omitir la sincronización de Sofascore",
     )
+    parser.add_argument(
+        "--backfill",
+        nargs="*",
+        type=int,
+        metavar="YEAR",
+        help=(
+            "Descarga y persiste datos JeffSackmann en DB. "
+            "Sin argumentos: 2022-2024. "
+            "Con años: --backfill 2018 2019 2020 2021"
+        ),
+    )
+    parser.add_argument(
+        "--tours",
+        nargs="+",
+        choices=["ATP", "WTA"],
+        default=["ATP", "WTA"],
+        help="Circuitos a backfillear con --backfill (defecto: ATP WTA)",
+    )
     args = parser.parse_args()
-    run(years=args.years, force=args.force, sofascore=not args.no_sofascore)
+
+    if args.backfill is not None:
+        init_db()
+        bf_years = args.backfill if args.backfill else [2022, 2023, 2024]
+        logger.info(f"=== Backfill JeffSackmann — años: {bf_years} | tours: {args.tours} ===")
+        sync_jeffsackmann(years=bf_years, tours=args.tours, force=args.force)
+        print_summary()
+    else:
+        run(years=args.years, force=args.force, sofascore=not args.no_sofascore)

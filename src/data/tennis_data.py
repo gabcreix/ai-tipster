@@ -82,10 +82,50 @@ def _download_tml(years: list) -> pd.DataFrame:
     return full
 
 
+def _load_jeffsackmann_from_db(years: list, tour: str) -> tuple:
+    """
+    Lee partidos JeffSackmann de match_history para los años indicados.
+    Devuelve (df_desde_db, años_no_encontrados_en_db).
+    """
+    try:
+        from src.data.database import get_connection
+        date_filters = " OR ".join(
+            f"(tourney_date >= {y}0101 AND tourney_date <= {y}1231)"
+            for y in years
+        )
+        with get_connection() as conn:
+            rows = conn.execute(
+                f"SELECT * FROM match_history "
+                f"WHERE source = 'jeffsackmann' AND tour = ? AND ({date_filters})",
+                [tour],
+            ).fetchall()
+
+        if not rows:
+            return pd.DataFrame(), list(years)
+
+        df = pd.DataFrame([dict(r) for r in rows])
+        years_in_db = {
+            y for y in years
+            if ((df["tourney_date"] >= y * 10000 + 101) &
+                (df["tourney_date"] <= y * 10000 + 1231)).any()
+        }
+        years_missing = [y for y in years if y not in years_in_db]
+        if years_in_db:
+            logger.info(
+                f"JeffSackmann {tour} {sorted(years_in_db)}: "
+                f"{len(df)} partidos leídos de DB"
+            )
+        return df, years_missing
+
+    except Exception as e:
+        logger.warning(f"No se pudo leer JeffSackmann de DB: {e}")
+        return pd.DataFrame(), list(years)
+
+
 def download_atp_matches(years: list = YEARS, include_recent: bool = True) -> pd.DataFrame:
     """
     Descarga partidos ATP.
-    - JeffSackmann para 2022-2024
+    - DB local (jeffsackmann) si ya se hizo backfill, si no HTTP JeffSackmann
     - TML-Database para 2025-2026 (si include_recent=True)
     """
     recent_years = [y for y in [2025, 2026] if y not in years]
@@ -94,16 +134,27 @@ def download_atp_matches(years: list = YEARS, include_recent: bool = True) -> pd
     if cached is not None:
         return cached
 
-    df = _download_matches(BASE_URL_ATP, "atp", years)
+    # 1. Años históricos: DB primero, HTTP sólo para los que falten
+    db_df, years_to_fetch = _load_jeffsackmann_from_db(years, "ATP")
+    if years_to_fetch:
+        http_df = _download_matches(BASE_URL_ATP, "atp", years_to_fetch)
+        if not db_df.empty and not http_df.empty:
+            df = pd.concat([db_df, http_df], ignore_index=True)
+        else:
+            df = http_df if db_df.empty else db_df
+    else:
+        df = db_df
 
+    # 2. Datos recientes TML-Database (2025+)
     if include_recent and recent_years:
-        tml_df = download_tml_atp(recent_years)  # match_history → caché → HTTP
+        tml_df = download_tml_atp(recent_years)
         if not tml_df.empty:
             df = pd.concat([df, tml_df], ignore_index=True) if not df.empty else tml_df
             logger.info(f"ATP total con datos recientes: {len(df)} partidos")
 
+    ttl = 24 if not years_to_fetch else 4
     if not df.empty:
-        cache.save(key, df, ttl_hours=4)
+        cache.save(key, df, ttl_hours=ttl)
     return df
 
 
@@ -142,8 +193,19 @@ def download_wta_matches(years: list = YEARS) -> pd.DataFrame:
     cached = cache.load(key)
     if cached is not None:
         return cached
-    df = _download_matches(BASE_URL_WTA, "wta", years)
-    # Enriquecer con partidos WTA recientes de match_history (api-tennis 2025+)
+
+    # 1. Años históricos: DB primero, HTTP sólo para los que falten
+    db_df, years_to_fetch = _load_jeffsackmann_from_db(years, "WTA")
+    if years_to_fetch:
+        http_df = _download_matches(BASE_URL_WTA, "wta", years_to_fetch)
+        if not db_df.empty and not http_df.empty:
+            df = pd.concat([db_df, http_df], ignore_index=True)
+        else:
+            df = http_df if db_df.empty else db_df
+    else:
+        df = db_df
+
+    # 2. Enriquecer con partidos WTA recientes de match_history (api-tennis 2025+)
     try:
         from src.data.database import load_matches_from_db
         wta_recent = load_matches_from_db(years=[2025, 2026], tour="WTA")
@@ -154,8 +216,10 @@ def download_wta_matches(years: list = YEARS) -> pd.DataFrame:
             logger.info(f"WTA: +{len(wta_recent)} partidos recientes (match_history)")
     except Exception:
         pass
+
+    ttl = 24 if not years_to_fetch else 12
     if not df.empty:
-        cache.save(key, df, ttl_hours=12)
+        cache.save(key, df, ttl_hours=ttl)
     return df
 
 
