@@ -14,7 +14,7 @@ BASE_URL = BASE_URL_ATP  # compatibilidad
 # TML-Database: ATP 2025-2026 (actualizado diariamente)
 BASE_URL_TML = "https://raw.githubusercontent.com/Tennismylife/TML-Database/master"
 
-YEARS = [2022, 2023, 2024]  # 2025+ para ATP se descarga de TML-Database
+YEARS = [2018, 2019, 2020, 2021, 2022, 2023, 2024]  # 2025+ para ATP se descarga de TML-Database
 
 SURFACE_MAP = {
     "Hard": "hard",
