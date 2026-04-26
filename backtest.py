@@ -1,288 +1,288 @@
 """
-Backtesting del modelo de tenis sobre datos JeffSackmann 2024.
+Backtest del modelo de tenis usando datos históricos JeffSackmann.
 
-Split limpio:
-  - Train (serve stats): partidos ATP/WTA 2022-2023
-  - Test:                partidos ATP/WTA 2024
-  - Rankings:            winner_rank / loser_rank de cada partido
-                         (datos contemporáneos, sin lookahead)
+Metodología: split por año (train / test)
+  - Para cada partido del año test, calcula la probabilidad del ganador usando
+    estadísticas construidas únicamente con datos de entrenamiento.
+  - Usa los 4 factores del modelo real: servicio · forma · ranking · H2H.
+  - winner_rank_points del propio partido como proxy de ranking contemporáneo
+    (sin lookahead: ese dato ya era público cuando se jugó el partido).
 
-Solo se evalúan los componentes disponibles históricamente:
-  serve_model + ranking_model  (sin form ni H2H).
+Métricas:
+  - Accuracy: % de partidos donde el favorito del modelo ganó
+  - Brier score: calibración de probabilidades (0.25 = aleatorio)
+  - Calibración por tramos de confianza
+  - Comparación vs baseline (solo ranking Bradley-Terry)
+
+Uso:
+  python backtest.py                           # ATP+WTA, test 2024, train 2022-2023
+  python backtest.py --test-year 2023          # test 2023, train 2022
+  python backtest.py --surface Clay            # solo tierra batida
+  python backtest.py --tour ATP                # solo ATP
+  python backtest.py --train 2021 2022 2023    # años de entrenamiento a medida
 """
+import argparse
 import pandas as pd
 from loguru import logger
 
+from src.data.database import init_db
 from src.data.tennis_data import (
-    _download_matches, download_tml_atp, calculate_player_stats,
-    BASE_URL_ATP, BASE_URL_WTA,
+    download_atp_matches, download_wta_matches,
+    calculate_player_stats, calculate_recent_form, calculate_h2h,
 )
-from src.models.tennis_engine import prob_win_match, prob_win_by_ranking
-from config import SERVE_WEIGHT, RANK_WEIGHT, MIN_EV_THRESHOLD, MAX_EV
+from src.models.tennis_engine import (
+    prob_win_match, prob_win_by_ranking,
+    DEFAULT_SERVE_WIN_PCT_ATP, DEFAULT_SERVE_WIN_PCT_WTA, DEFAULT_RANK_POINTS,
+)
+from config import SERVE_WEIGHT, FORM_WEIGHT, RANK_WEIGHT, H2H_WEIGHT
 
 SURFACES = ["Clay", "Hard", "Grass"]
-DEFAULT_SERVE_ATP = 0.62
-DEFAULT_SERVE_WTA = 0.55
 
 
-# ── helpers ──────────────────────────────────────────────────────────────────
+# ── Predicción ────────────────────────────────────────────────────────────────
 
-def _rank_to_pts(rank) -> float:
-    """Convierte posición de ranking en 'puntos' para Bradley-Terry.
-    Rank 1 → 10000 pts, rank 100 → 100 pts, etc.
+def _predict(
+    winner: str, loser: str, surface: str, tour: str,
+    serve_stats: dict, form: dict, h2h: dict,
+    rk_pts_w, rk_pts_l,
+) -> tuple:
     """
-    try:
-        r = float(rank)
-        return 10_000 / r if r > 0 else 0
-    except (ValueError, TypeError):
-        return 0
+    Devuelve (prob_modelo, prob_baseline) para que el ganador real gane.
+    prob_baseline = solo Bradley-Terry con ranking.
+    """
+    default_serve = DEFAULT_SERVE_WIN_PCT_WTA if tour == "WTA" else DEFAULT_SERVE_WIN_PCT_ATP
+
+    serve_w = serve_stats.get(winner, default_serve)
+    serve_l = serve_stats.get(loser,  default_serve)
+
+    pts_w = float(rk_pts_w) if rk_pts_w and not pd.isna(rk_pts_w) else DEFAULT_RANK_POINTS
+    pts_l = float(rk_pts_l) if rk_pts_l and not pd.isna(rk_pts_l) else DEFAULT_RANK_POINTS
+
+    form_w = form.get(winner, 0.5)
+    form_l = form.get(loser,  0.5)
+    total  = form_w + form_l
+    prob_form = form_w / total if total > 0 else 0.5
+
+    prob_serve    = prob_win_match(serve_w, serve_l)
+    prob_rank     = prob_win_by_ranking(pts_w, pts_l)
+    prob_h2h      = h2h.get(winner, {}).get(loser, 0.5)
+
+    prob_model = round(
+        SERVE_WEIGHT * prob_serve +
+        FORM_WEIGHT  * prob_form  +
+        RANK_WEIGHT  * prob_rank  +
+        H2H_WEIGHT   * prob_h2h,
+        4,
+    )
+    return prob_model, round(prob_rank, 4)
 
 
-def _get_serve(player: str, stats: pd.DataFrame, default: float) -> float:
-    if stats.empty:
-        return default
-    row = stats[stats["player"] == player]
-    return float(row.iloc[0]["serve_win_pct"]) if not row.empty else default
+# ── Backtest principal ────────────────────────────────────────────────────────
 
+def run_backtest(
+    train_df: pd.DataFrame,
+    test_df:  pd.DataFrame,
+    tour:     str,
+    surface_filter: str = None,
+) -> list:
+    """
+    Evalúa el modelo en test_df entrenado con train_df.
+    Devuelve lista de dicts con {prob, baseline, correct, surface}.
+    """
+    surfaces = [surface_filter] if surface_filter else SURFACES
 
-def _surface_key(surface: str) -> str:
-    """Normaliza la superficie al formato de calculate_player_stats."""
-    return surface.strip().capitalize()
+    # Construir estadísticas de entrenamiento por superficie
+    serve_by_surf = {}
+    form_by_surf  = {}
+    for s in surfaces:
+        stats = calculate_player_stats(train_df, surface=s)
+        serve_by_surf[s] = (
+            dict(zip(stats["player"], stats["serve_win_pct"]))
+            if not stats.empty else {}
+        )
+        form_by_surf[s] = calculate_recent_form(train_df, surface=s)
 
+    h2h = calculate_h2h(train_df)
 
-# ── backtest por circuito ─────────────────────────────────────────────────────
+    # Filtrar test
+    needed = ["winner_name", "loser_name", "surface"]
+    sub = test_df.dropna(subset=needed)
+    if surface_filter:
+        sub = sub[sub["surface"].str.lower() == surface_filter.lower()]
 
-def backtest_tour(base_url: str, prefix: str, default_serve: float):
-    logger.info(f"\n{'='*55}")
-    logger.info(f"  BACKTEST {prefix.upper()} — train 2022-23 / test 2024")
-    logger.info(f"{'='*55}")
-
-    train_df = _download_matches(base_url, prefix, [2022, 2023])
-    test_df  = _download_matches(base_url, prefix, [2024])
-
-    if train_df.empty or test_df.empty:
-        logger.error("Sin datos suficientes para el backtest")
-        return
-
-    # Estadísticas de servicio por superficie (solo datos de entrenamiento)
-    serve_stats = {s: calculate_player_stats(train_df, surface=s) for s in SURFACES}
-
-    # Filtrar filas con datos mínimos necesarios
-    needed = ["winner_name", "loser_name", "surface", "winner_rank", "loser_rank"]
-    test_df = test_df.dropna(subset=needed)
-    test_df = test_df[test_df["winner_rank"].astype(float) > 0]
-    test_df = test_df[test_df["loser_rank"].astype(float) > 0]
-
-    if test_df.empty:
-        logger.error("Sin filas válidas en test (winner_rank/loser_rank ausentes)")
-        return
-
-    logger.info(f"  {len(test_df)} partidos de test con ranking disponible")
-
-    records = []
-    for _, row in test_df.iterrows():
-        p1     = row["winner_name"]   # p1 = ganador real
-        p2     = row["loser_name"]
-        surf   = _surface_key(row["surface"])
-        if surf not in serve_stats:
+    results = []
+    for _, row in sub.iterrows():
+        surf = row["surface"].strip().title()
+        if surf not in serve_by_surf:
             continue
 
-        stats = serve_stats[surf]
-        serve_p1 = _get_serve(p1, stats, default_serve)
-        serve_p2 = _get_serve(p2, stats, default_serve)
+        winner = row["winner_name"]
+        loser  = row["loser_name"]
+        rk_w   = row.get("winner_rank_points")
+        rk_l   = row.get("loser_rank_points")
 
-        pts_p1 = _rank_to_pts(row["winner_rank"])
-        pts_p2 = _rank_to_pts(row["loser_rank"])
-
-        prob_serve = prob_win_match(serve_p1, serve_p2)
-        prob_rank  = prob_win_by_ranking(pts_p1, pts_p2)
-
-        # Blend normalizado (solo serve + rank, sin form ni H2H)
-        w_total = SERVE_WEIGHT + RANK_WEIGHT
-        prob_model   = (SERVE_WEIGHT * prob_serve + RANK_WEIGHT * prob_rank) / w_total
-        prob_baseline = prob_rank  # solo ranking, como referencia
-
-        records.append({
-            "surface":        surf,
-            "prob_model":     round(prob_model,    4),
-            "prob_baseline":  round(prob_baseline, 4),
-            "prob_serve":     round(prob_serve,    4),
+        prob, baseline = _predict(
+            winner, loser, surf, tour,
+            serve_by_surf[surf], form_by_surf[surf], h2h,
+            rk_w, rk_l,
+        )
+        results.append({
+            "prob":     prob,
+            "baseline": baseline,
+            "correct":  int(prob > 0.5),
+            "correct_base": int(baseline > 0.5),
+            "surface":  surf,
         })
 
-    df = pd.DataFrame(records)
-    _print_metrics(df, prefix.upper())
-    _simulate_roi(df)
-    return df
+    return results
 
 
-# ── métricas ──────────────────────────────────────────────────────────────────
+# ── Informe ───────────────────────────────────────────────────────────────────
 
-def _print_metrics(df: pd.DataFrame, label: str):
-    n       = len(df)
-    # p1 siempre es el ganador real → correcto si prob > 0.5
-    correct       = (df["prob_model"]    > 0.5).sum()
-    correct_base  = (df["prob_baseline"] > 0.5).sum()
+def print_report(results: list, label: str):
+    if not results:
+        logger.warning(f"{label}: sin datos para evaluar.")
+        return
 
-    logger.info(f"\n  Accuracy global: {correct/n:.1%} ({correct}/{n})")
-    logger.info(f"  Baseline (solo ranking): {correct_base/n:.1%} ({correct_base}/{n})")
-    logger.info(f"  Ganancia vs baseline:  {(correct-correct_base)/n:+.1%}")
+    df = pd.DataFrame(results)
+    n  = len(df)
+
+    acc      = df["correct"].mean()
+    acc_base = df["correct_base"].mean()
+    brier    = ((df["prob"] - 1.0) ** 2).mean()
+    brier_b  = ((df["baseline"] - 1.0) ** 2).mean()
+
+    print(f"\n{'='*60}")
+    print(f"  {label}")
+    print(f"{'='*60}")
+    print(f"  Partidos evaluados : {n:,}")
+    print(f"  Accuracy modelo    : {acc:.1%}  (baseline ranking: {acc_base:.1%})")
+    print(f"  Ganancia vs base   : {acc - acc_base:+.1%}")
+    print(f"  Brier score        : {brier:.4f}  (baseline: {brier_b:.4f}, aleatorio: 0.2500)")
 
     # Por superficie
-    logger.info(f"\n  Accuracy por superficie:")
-    for surf in SURFACES:
-        s = df[df["surface"] == surf]
-        if s.empty:
-            continue
-        acc = (s["prob_model"] > 0.5).mean()
-        logger.info(f"    {surf:6s}: {acc:.1%}  ({len(s)} partidos)")
+    surfs = df["surface"].unique()
+    if len(surfs) > 1:
+        print(f"\n  Por superficie:")
+        print(f"  {'Superficie':10s} {'Accuracy':>9s} {'Baseline':>9s} {'N':>6s}")
+        print(f"  {'-'*38}")
+        for surf in sorted(surfs):
+            s = df[df["surface"] == surf]
+            print(
+                f"  {surf:10s} {s['correct'].mean():>9.1%} "
+                f"{s['correct_base'].mean():>9.1%} {len(s):>6,}"
+            )
 
-    # Calibración correcta: crear pares (prob_predicha, outcome) para AMBOS jugadores
-    # p1 = ganador real (outcome=1), p2 = perdedor (outcome=0)
+    # Calibración: usamos ambas perspectivas (ganador y perdedor)
     cal_rows = (
-        [{"prob": p, "won": 1} for p in df["prob_model"]] +
-        [{"prob": 1 - p, "won": 0} for p in df["prob_model"]]
+        [{"prob": p, "won": 1} for p in df["prob"]] +
+        [{"prob": 1 - p, "won": 0} for p in df["prob"]]
     )
     cal = pd.DataFrame(cal_rows)
 
-    logger.info(f"\n  Calibración (predicho vs real):")
-    buckets = [(0.50, 0.55), (0.55, 0.60), (0.60, 0.65), (0.65, 0.70), (0.70, 1.01)]
+    buckets = [
+        (0.40, 0.50), (0.50, 0.60), (0.60, 0.70), (0.70, 0.80), (0.80, 1.01)
+    ]
+    print(f"\n  Calibración (predicho vs real):")
+    print(f"  {'Rango':12s} {'Predicha':>9s} {'Real':>7s} {'Diff':>7s}  N")
+    print(f"  {'-'*48}")
     for lo, hi in buckets:
         b = cal[(cal["prob"] >= lo) & (cal["prob"] < hi)]
-        if b.empty:
+        if len(b) < 20:
             continue
-        predicted   = b["prob"].mean()
-        actual      = b["won"].mean()
-        diff        = actual - predicted
-        flag        = "✅" if abs(diff) < 0.03 else ("⬆️" if diff > 0 else "⬇️")
-        logger.info(
-            f"    {lo:.0%}–{hi:.0%}: pred {predicted:.1%} → real {actual:.1%} "
-            f"({diff:+.1%}) {flag}  [{len(b)//2} partidos]"
+        pred   = b["prob"].mean()
+        actual = b["won"].mean()
+        diff   = actual - pred
+        flag   = "✓" if abs(diff) < 0.04 else ("▲" if diff > 0 else "▼")
+        print(
+            f"  {lo:.0%}–{hi if hi < 1 else 1:.0%}       "
+            f"{pred:>9.1%} {actual:>7.1%} {diff:>+7.1%}  {len(b)//2}  {flag}"
         )
 
-    # Brier score (p1 siempre ganó → outcome=1)
-    brier_model = ((df["prob_model"]    - 1) ** 2).mean()
-    brier_base  = ((df["prob_baseline"] - 1) ** 2).mean()
-    logger.info(f"\n  Brier score — modelo: {brier_model:.4f} | baseline: {brier_base:.4f}")
-    logger.info(
-        f"  {'✅ Modelo mejora baseline' if brier_model < brier_base else '⚠️  Baseline igual o mejor'}"
-    )
+    print()
 
 
-def _simulate_roi(df: pd.DataFrame):
-    """
-    ROI simulado asumiendo que el mercado usa las odds del modelo de ranking
-    con un margen del 5%. Apostamos Kelly (25%) cuando EV > MIN_EV_THRESHOLD.
-    """
-    from config import KELLY_FRACTION, MAX_STAKE_EUR, BANKROLL
+# ── Carga de datos ────────────────────────────────────────────────────────────
 
-    bankroll = float(BANKROLL)
-    total_staked = 0.0
-    total_profit = 0.0
-    bets = 0
+def _split(df: pd.DataFrame, train_years: list, test_year: int):
+    """Divide un DataFrame por año de torney_date (YYYYMMDD)."""
+    df = df.copy()
+    df["_year"] = (df["tourney_date"].astype(str).str[:4].astype(int, errors="ignore"))
+    train = df[df["_year"].isin(train_years)].drop(columns=["_year"])
+    test  = df[df["_year"] == test_year].drop(columns=["_year"])
+    return train, test
 
-    for _, row in df.iterrows():
-        prob_model = row["prob_model"]
-        prob_base  = row["prob_baseline"]
-        if prob_base <= 0:
+
+# ── CLI ───────────────────────────────────────────────────────────────────────
+
+def run(
+    test_year:     int,
+    train_years:   list,
+    surface:       str = None,
+    tour_filter:   str = None,
+):
+    init_db()
+
+    tours = [tour_filter] if tour_filter else ["ATP", "WTA"]
+    all_years = sorted(set(train_years) | {test_year})
+
+    for tour in tours:
+        logger.info(f"Cargando datos {tour}...")
+        df = download_atp_matches(years=all_years) if tour == "ATP" else download_wta_matches(years=all_years)
+        if df.empty:
+            logger.warning(f"Sin datos para {tour}")
             continue
 
-        # Odds "de mercado" simuladas: inverso de prob baseline con 5% margen
-        market_odds = (1 / prob_base) * 0.95
+        train_df, test_df = _split(df, train_years, test_year)
 
-        ev = prob_model * market_odds - 1
-        if ev < MIN_EV_THRESHOLD or ev > MAX_EV:
+        if train_df.empty:
+            logger.warning(f"Sin datos de entrenamiento {tour} para {train_years}")
+            continue
+        if test_df.empty:
+            logger.warning(f"Sin datos de test {tour} para {test_year}")
             continue
 
-        b     = market_odds - 1
-        kelly = (b * prob_model - (1 - prob_model)) / b if b > 0 else 0
-        stake = min(max(kelly * KELLY_FRACTION * bankroll, 0), MAX_STAKE_EUR)
-        if stake <= 0:
-            continue
+        logger.info(
+            f"{tour}: {len(train_df):,} partidos train ({train_years}) / "
+            f"{len(test_df):,} partidos test ({test_year})"
+        )
 
-        # p1 siempre ganó → apuesta ganada
-        profit = round(stake * (market_odds - 1), 2)
-        total_staked += stake
-        total_profit += profit
-        bets += 1
+        results = run_backtest(train_df, test_df, tour=tour, surface_filter=surface)
 
-    roi = (total_profit / total_staked * 100) if total_staked > 0 else 0
-    logger.info(f"\n  Simulación ROI (vs odds ranking + 5% margen):")
-    logger.info(f"    Apuestas con valor: {bets}")
-    logger.info(f"    Staked total:  €{total_staked:.2f}")
-    logger.info(f"    Profit total:  €{total_profit:+.2f}")
-    logger.info(f"    ROI:           {roi:+.1f}%")
-    logger.info(f"    ⚠️  Nota: ROI inflado (siempre apostamos al ganador real)")
+        surf_label = f" | {surface}" if surface else ""
+        label = (
+            f"{tour} — test {test_year} | train {train_years[0]}–{train_years[-1]}"
+            f"{surf_label}"
+        )
+        print_report(results, label)
 
-
-# ── backtest ATP 2025 (TML-Database) ─────────────────────────────────────────
-
-def backtest_atp_2025():
-    """
-    Backtest adicional usando TML-Database para 2025.
-    Train: JeffSackmann 2022-2024   Test: TML-Database 2025
-    """
-    logger.info(f"\n{'='*55}")
-    logger.info(f"  BACKTEST ATP — train 2022-24 / test 2025 (TML-Database)")
-    logger.info(f"{'='*55}")
-
-    train_df = _download_matches(BASE_URL_ATP, "atp", [2022, 2023, 2024])
-    test_df  = download_tml_atp([2025])
-
-    if train_df.empty or test_df.empty:
-        logger.error("Sin datos suficientes para backtest 2025")
-        return
-
-    serve_stats = {s: calculate_player_stats(train_df, surface=s) for s in SURFACES}
-
-    needed = ["winner_name", "loser_name", "surface", "winner_rank", "loser_rank"]
-    test_df = test_df.dropna(subset=needed)
-    test_df = test_df[test_df["winner_rank"].astype(float) > 0]
-    test_df = test_df[test_df["loser_rank"].astype(float) > 0]
-
-    if test_df.empty:
-        logger.error("Sin filas válidas en test 2025")
-        return
-
-    logger.info(f"  {len(test_df)} partidos de test 2025 con ranking disponible")
-
-    records = []
-    for _, row in test_df.iterrows():
-        p1   = row["winner_name"]
-        p2   = row["loser_name"]
-        surf = _surface_key(row["surface"])
-        if surf not in serve_stats:
-            continue
-
-        stats = serve_stats[surf]
-        serve_p1 = _get_serve(p1, stats, DEFAULT_SERVE_ATP)
-        serve_p2 = _get_serve(p2, stats, DEFAULT_SERVE_ATP)
-
-        pts_p1 = _rank_to_pts(row["winner_rank"])
-        pts_p2 = _rank_to_pts(row["loser_rank"])
-
-        prob_serve = prob_win_match(serve_p1, serve_p2)
-        prob_rank  = prob_win_by_ranking(pts_p1, pts_p2)
-
-        w_total = SERVE_WEIGHT + RANK_WEIGHT
-        prob_model    = (SERVE_WEIGHT * prob_serve + RANK_WEIGHT * prob_rank) / w_total
-        prob_baseline = prob_rank
-
-        records.append({
-            "surface":       surf,
-            "prob_model":    round(prob_model,    4),
-            "prob_baseline": round(prob_baseline, 4),
-            "prob_serve":    round(prob_serve,    4),
-        })
-
-    df = pd.DataFrame(records)
-    _print_metrics(df, "ATP 2025")
-    _simulate_roi(df)
-    return df
-
-
-# ── main ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    backtest_tour(BASE_URL_ATP, "atp", DEFAULT_SERVE_ATP)
-    backtest_tour(BASE_URL_WTA, "wta", DEFAULT_SERVE_WTA)
-    backtest_atp_2025()
+    parser = argparse.ArgumentParser(
+        description="Backtest del modelo de tenis (4 factores) sobre datos históricos"
+    )
+    parser.add_argument(
+        "--test-year", type=int, default=2024,
+        help="Año de evaluación (default: 2024)",
+    )
+    parser.add_argument(
+        "--train", nargs="+", type=int, default=[2022, 2023],
+        metavar="YEAR",
+        help="Años de entrenamiento (default: 2022 2023)",
+    )
+    parser.add_argument(
+        "--surface", choices=["Clay", "Hard", "Grass"],
+        help="Filtrar por superficie",
+    )
+    parser.add_argument(
+        "--tour", choices=["ATP", "WTA"],
+        help="Filtrar por circuito (default: ambos)",
+    )
+    args = parser.parse_args()
+
+    run(
+        test_year=args.test_year,
+        train_years=args.train,
+        surface=args.surface,
+        tour_filter=args.tour,
+    )
