@@ -3,8 +3,9 @@ CLI para normalizar nombres de jugadores.
 Mapea nombres de the-odds-api a nombres canónicos de JeffSackmann.
 
 Uso:
-  python names.py            # revisa nombres sin resolver
-  python names.py --list     # muestra aliases ya guardados
+  python names.py                          # revisa nombres sin resolver
+  python names.py --list                   # muestra aliases ya guardados
+  python names.py --edit "Daniel Merida"   # edita un alias existente
 """
 import argparse
 import difflib
@@ -62,6 +63,79 @@ def cmd_list():
         canon_str = canonical if canonical is not None else "(nuevo jugador — sin datos)"
         print(f"  {odds:35s} → {canon_str}")
     print(f"\n  Total: {len(aliases)} alias")
+
+
+def cmd_edit(odds_name: str):
+    """Edita un alias existente."""
+    aliases = get_aliases()
+
+    # Búsqueda exacta primero, luego parcial
+    match = None
+    if odds_name in aliases:
+        match = odds_name
+    else:
+        candidates = [k for k in aliases if odds_name.lower() in k.lower()]
+        if len(candidates) == 1:
+            match = candidates[0]
+        elif len(candidates) > 1:
+            print(f"\n  Varias coincidencias para '{odds_name}':")
+            for i, c in enumerate(candidates, 1):
+                print(f"    {i}. {c}  → {aliases[c] or '(nuevo jugador)'}")
+            raw = input("  Número: ").strip()
+            if raw.isdigit() and 1 <= int(raw) <= len(candidates):
+                match = candidates[int(raw) - 1]
+            else:
+                print("  Cancelado.")
+                return
+
+    if match is None:
+        print(f"\n  No se encontró ningún alias para '{odds_name}'.")
+        print("  Usa `python names.py --list` para ver los aliases guardados.")
+        return
+
+    current = aliases[match]
+    current_str = current if current is not None else "(nuevo jugador — sin datos)"
+    print(f"\n  Alias actual: '{match}' → {current_str}")
+
+    known = _load_known_players()
+    tour_hint = None
+    from src.data.database import get_connection
+    with get_connection() as conn:
+        row = conn.execute(
+            "SELECT tour FROM player_aliases WHERE odds_name = ?", [match]
+        ).fetchone()
+        if row:
+            tour_hint = row["tour"]
+
+    pool = known.get(tour_hint or "ALL", []) + known.get("ALL", [])
+    suggestions = _get_suggestions(match, pool)
+
+    print("  Sugerencias:")
+    for j, (name, score) in enumerate(suggestions, 1):
+        print(f"    {j}. {name}  ({score:.0%})")
+    print("  Opciones: número · nombre completo · [n]uevo jugador · [Enter] cancelar")
+
+    raw = input("  > ").strip()
+    if not raw:
+        print("  Cancelado.")
+        return
+    elif raw.lower() == "n":
+        save_alias(match, canonical=None, tour=tour_hint)
+        invalidate_alias_cache()
+        print(f"  → '{match}' marcado como jugador nuevo (sin datos históricos)")
+    elif raw.isdigit():
+        idx = int(raw) - 1
+        if 0 <= idx < len(suggestions):
+            canonical = suggestions[idx][0]
+            save_alias(match, canonical=canonical, tour=tour_hint)
+            invalidate_alias_cache()
+            print(f"  → '{match}' → '{canonical}'")
+        else:
+            print(f"  Número fuera de rango. Cancelado.")
+    else:
+        save_alias(match, canonical=raw, tour=tour_hint)
+        invalidate_alias_cache()
+        print(f"  → '{match}' → '{raw}'")
 
 
 def cmd_resolve():
@@ -146,12 +220,18 @@ def run():
         "--list", action="store_true",
         help="Muestra los aliases ya guardados y sale",
     )
+    parser.add_argument(
+        "--edit", metavar="NOMBRE",
+        help="Edita el alias de un nombre existente (búsqueda parcial)",
+    )
     args = parser.parse_args()
 
     init_db()
 
     if args.list:
         cmd_list()
+    elif args.edit:
+        cmd_edit(args.edit)
     else:
         cmd_resolve()
 
