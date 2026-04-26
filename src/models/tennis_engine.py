@@ -120,6 +120,23 @@ def prob_win_match(
     return round(min(max(prob, 0), 1), 4)
 
 
+def _weighted_blend(
+    prob_serve: float, prob_form: float, prob_rank: float, prob_h2h: float,
+    serve_is_default: bool, form_is_default: bool, h2h_is_default: bool,
+) -> float:
+    """
+    Blend ponderado de los 4 factores. Cuando un factor usa datos por defecto
+    (ambos jugadores en el mismo valor neutro), su peso se redistribuye al
+    ranking en lugar de contribuir con 0.5 y diluir señales extremas.
+    """
+    w_serve = 0.0 if serve_is_default else SERVE_WEIGHT
+    w_form  = 0.0 if form_is_default  else FORM_WEIGHT
+    w_h2h   = 0.0 if h2h_is_default   else H2H_WEIGHT
+    w_rank  = RANK_WEIGHT + (SERVE_WEIGHT - w_serve) + (FORM_WEIGHT - w_form) + (H2H_WEIGHT - w_h2h)
+
+    return w_serve * prob_serve + w_form * prob_form + w_rank * prob_rank + w_h2h * prob_h2h
+
+
 def calculate_ev(prob: float, odd: float) -> float:
     """EV calculado con cuota descontada un ODD_DISCOUNT para cubrir movimiento de línea."""
     discounted = odd * (1 - ODD_DISCOUNT)
@@ -209,12 +226,15 @@ def analyze_tennis_match(
     prob_serve = prob_win_match(serve_p1, serve_p2)
     prob_rank  = prob_win_by_ranking(pts_p1, pts_p2)
 
-    # Blend: servicio + forma + ranking + H2H
+    # Blend: redistribuir peso de factores sin datos propios al ranking
+    # (evita que los defaults 0.5 diluyan señales extremas de ranking)
     prob_p1 = round(
-        SERVE_WEIGHT * prob_serve +
-        FORM_WEIGHT  * prob_form  +
-        RANK_WEIGHT  * prob_rank  +
-        H2H_WEIGHT   * prob_h2h,
+        _weighted_blend(
+            prob_serve, prob_form, prob_rank, prob_h2h,
+            serve_is_default  = (serve_p1 == default_pct and serve_p2 == default_pct),
+            form_is_default   = (form_p1_raw == 0.5 and form_p2_raw == 0.5),
+            h2h_is_default    = (prob_h2h == 0.5),
+        ),
         4
     )
     prob_p2 = round(1 - prob_p1, 4)

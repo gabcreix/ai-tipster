@@ -31,10 +31,9 @@ from src.data.tennis_data import (
     calculate_player_stats, calculate_recent_form, calculate_h2h,
 )
 from src.models.tennis_engine import (
-    prob_win_match, prob_win_by_ranking,
+    prob_win_match, prob_win_by_ranking, _weighted_blend,
     DEFAULT_SERVE_WIN_PCT_ATP, DEFAULT_SERVE_WIN_PCT_WTA, DEFAULT_RANK_POINTS,
 )
-from config import SERVE_WEIGHT, FORM_WEIGHT, RANK_WEIGHT, H2H_WEIGHT
 
 SURFACES = ["Clay", "Hard", "Grass"]
 
@@ -63,15 +62,17 @@ def _predict(
     total  = form_w + form_l
     prob_form = form_w / total if total > 0 else 0.5
 
-    prob_serve    = prob_win_match(serve_w, serve_l)
-    prob_rank     = prob_win_by_ranking(pts_w, pts_l)
-    prob_h2h      = h2h.get(winner, {}).get(loser, 0.5)
+    prob_serve = prob_win_match(serve_w, serve_l)
+    prob_rank  = prob_win_by_ranking(pts_w, pts_l)
+    prob_h2h   = h2h.get(winner, {}).get(loser, 0.5)
 
     prob_model = round(
-        SERVE_WEIGHT * prob_serve +
-        FORM_WEIGHT  * prob_form  +
-        RANK_WEIGHT  * prob_rank  +
-        H2H_WEIGHT   * prob_h2h,
+        _weighted_blend(
+            prob_serve, prob_form, prob_rank, prob_h2h,
+            serve_is_default = (serve_w == default_serve and serve_l == default_serve),
+            form_is_default  = (form_w == 0.5 and form_l == 0.5),
+            h2h_is_default   = (prob_h2h == 0.5),
+        ),
         4,
     )
     return prob_model, round(prob_rank, 4)
