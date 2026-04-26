@@ -51,6 +51,7 @@ def init_db():
             );
         """)
     init_match_history()
+    init_aliases()
     logger.info(f"DB lista: {DB_PATH.resolve()}")
 
 
@@ -149,6 +150,77 @@ def get_pending_picks() -> list:
             JOIN matches m ON p.match_id = m.id
             WHERE p.result IS NULL
             ORDER BY p.created_at DESC
+        """).fetchall()
+
+
+def init_aliases():
+    """Crea las tablas player_aliases y unresolved_names si no existen."""
+    with get_connection() as conn:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS player_aliases (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                odds_name  TEXT NOT NULL UNIQUE,
+                canonical  TEXT,
+                tour       TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_aliases_odds
+                ON player_aliases (odds_name);
+
+            CREATE TABLE IF NOT EXISTS unresolved_names (
+                id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                odds_name  TEXT NOT NULL UNIQUE,
+                tour       TEXT,
+                seen_count INTEGER DEFAULT 1
+            );
+        """)
+
+
+def get_aliases() -> dict:
+    """Devuelve {odds_name: canonical} para todos los alias guardados.
+    canonical=None indica jugador nuevo sin datos históricos.
+    """
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT odds_name, canonical FROM player_aliases"
+        ).fetchall()
+    return {r["odds_name"]: r["canonical"] for r in rows}
+
+
+def save_alias(odds_name: str, canonical, tour: str = None):
+    """Guarda un alias y elimina el nombre de unresolved_names."""
+    with get_connection() as conn:
+        conn.execute("""
+            INSERT INTO player_aliases (odds_name, canonical, tour)
+            VALUES (?, ?, ?)
+            ON CONFLICT(odds_name) DO UPDATE SET
+                canonical = excluded.canonical,
+                tour      = excluded.tour
+        """, [odds_name, canonical, tour])
+        conn.execute(
+            "DELETE FROM unresolved_names WHERE odds_name = ?", [odds_name]
+        )
+
+
+def log_unresolved(odds_name: str, tour: str = None):
+    """Registra un nombre sin resolver o incrementa su contador."""
+    with get_connection() as conn:
+        conn.execute("""
+            INSERT INTO unresolved_names (odds_name, tour, seen_count)
+            VALUES (?, ?, 1)
+            ON CONFLICT(odds_name) DO UPDATE SET
+                seen_count = seen_count + 1
+        """, [odds_name, tour])
+
+
+def get_unresolved_names() -> list:
+    """Devuelve nombres sin resolver, ordenados por frecuencia."""
+    with get_connection() as conn:
+        return conn.execute("""
+            SELECT odds_name, tour, seen_count, first_seen
+            FROM unresolved_names
+            ORDER BY seen_count DESC, first_seen
         """).fetchall()
 
 
