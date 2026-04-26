@@ -260,11 +260,13 @@ def init_match_history():
         """)
 
 
-def upsert_matches(df, source: str, tour: str = "ATP") -> int:
+def upsert_matches(df, source: str, tour: str = "ATP", replace: bool = False) -> int:
     """
     Inserta filas de un DataFrame de partidos en match_history.
-    Ignora duplicados (UNIQUE tourney_id + match_num).
-    Devuelve el número de filas nuevas insertadas.
+    replace=False (default): INSERT OR IGNORE — nunca sobreescribe filas existentes.
+    replace=True:            INSERT OR REPLACE — actualiza filas ya existentes
+                             (usado para años vivos cuyo CSV se actualiza durante el año).
+    Devuelve el número de filas insertadas/reemplazadas.
     """
     import pandas as pd
 
@@ -291,13 +293,13 @@ def upsert_matches(df, source: str, tour: str = "ATP") -> int:
         "score":              "score",
     }
 
-    present = {k: v for k, v in cols.items() if k in df.columns}
+    present  = {k: v for k, v in cols.items() if k in df.columns}
+    conflict = "REPLACE" if replace else "IGNORE"
     inserted = 0
 
     with get_connection() as conn:
         for _, row in df.iterrows():
             values = {db_col: row.get(src_col) for src_col, db_col in present.items()}
-            # Convertir NaN a None
             values = {k: (None if (isinstance(v, float) and pd.isna(v)) else v)
                       for k, v in values.items()}
             values["source"] = source
@@ -307,7 +309,7 @@ def upsert_matches(df, source: str, tour: str = "ATP") -> int:
             col_names     = ", ".join(values.keys())
             try:
                 conn.execute(
-                    f"INSERT OR IGNORE INTO match_history ({col_names}) VALUES ({placeholders})",
+                    f"INSERT OR {conflict} INTO match_history ({col_names}) VALUES ({placeholders})",
                     values,
                 )
                 inserted += conn.execute("SELECT changes()").fetchone()[0]

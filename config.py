@@ -42,6 +42,9 @@ BOOKMAKERS = ["betfair", "bet365", "williamhill", "bwin"]
 MIN_EV_THRESHOLD = 0.03
 KELLY_FRACTION = 0.25
 MAX_STAKE_EUR = 50
+# Descuento aplicado a la cuota antes de calcular EV para compensar movimiento
+# entre ejecución del modelo y momento real de la apuesta (por defecto 2.5 %)
+ODD_DISCOUNT = 0.025
 
 # Pesos del modelo (deben sumar 1.0)
 SERVE_WEIGHT = 0.25   # modelo jerárquico punto→game→set→partido

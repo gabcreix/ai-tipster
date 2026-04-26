@@ -3,7 +3,7 @@ from math import comb
 from loguru import logger
 from config import (
     MIN_EV_THRESHOLD, KELLY_FRACTION, MAX_STAKE_EUR,
-    RANK_WEIGHT, SERVE_WEIGHT, FORM_WEIGHT, H2H_WEIGHT, MAX_EV,
+    RANK_WEIGHT, SERVE_WEIGHT, FORM_WEIGHT, H2H_WEIGHT, MAX_EV, ODD_DISCOUNT,
 )
 from src.data.name_mapper import map_name
 
@@ -121,12 +121,16 @@ def prob_win_match(
 
 
 def calculate_ev(prob: float, odd: float) -> float:
-    return round((prob * odd) - 1, 4)
+    """EV calculado con cuota descontada un ODD_DISCOUNT para cubrir movimiento de línea."""
+    discounted = odd * (1 - ODD_DISCOUNT)
+    return round((prob * discounted) - 1, 4)
 
 
 def kelly_stake(prob: float, odd: float, bankroll: float) -> float:
+    """Kelly sobre cuota descontada, igual que calculate_ev."""
+    discounted = odd * (1 - ODD_DISCOUNT)
     q = 1 - prob
-    b = odd - 1
+    b = discounted - 1
     if b <= 0:
         return 0
     kelly = (b * prob - q) / b
@@ -248,8 +252,9 @@ def analyze_tennis_match(
                     )
                     continue
 
+                eff_odd = round(odd * (1 - ODD_DISCOUNT), 3)
                 logger.info(
-                    f"  {name} | Odd: {odd} | "
+                    f"  {name} | Odd: {odd} (efectiva {eff_odd}) | "
                     f"Nuestra prob: {prob:.2%} | "
                     f"Mercado implica: {market_prob:.2%} | "
                     f"EV: {ev:+.2%}"

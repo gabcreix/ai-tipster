@@ -151,13 +151,16 @@ def sync_jeffsackmann(
     force: bool = False,
 ) -> dict[str, int]:
     """
-    Descarga datos históricos JeffSackmann (por defecto ATP+WTA 2022-2024) y
-    los persiste en match_history. Idempotente: INSERT OR IGNORE.
+    Descarga datos históricos JeffSackmann y los persiste en match_history.
 
-    Tras ejecutar esto una vez, main.py leerá estos años de DB en vez de HTTP.
-    Usar también para añadir años anteriores para backtesting:
-        python sync.py --backfill 2018 2019 2020 2021
+    Años estables (< año_actual - 1): INSERT OR IGNORE — se saltan si ya tienen filas.
+    Años vivos (año_actual y año_actual-1): INSERT OR REPLACE — siempre se re-sincronizan
+        porque JeffSackmann sigue añadiendo partidos a esos CSVs a lo largo del año.
+
+    Tras ejecutar esto una vez, main.py leerá de DB en vez de HTTP.
+    Añadir años anteriores:  python sync.py --backfill 2018 2019 2020 2021
     """
+    import datetime
     from src.data.tennis_data import _download_matches, BASE_URL_ATP, BASE_URL_WTA
     from src.data.database import get_match_history_counts
 
@@ -165,6 +168,9 @@ def sync_jeffsackmann(
         years = [2022, 2023, 2024]
     if tours is None:
         tours = ["ATP", "WTA"]
+
+    current_year = datetime.date.today().year
+    live_years   = {current_year, current_year - 1}
 
     counts = {
         (r["tour"], r["year"]): r["matches"]
@@ -177,26 +183,47 @@ def sync_jeffsackmann(
         base_url = BASE_URL_ATP if tour == "ATP" else BASE_URL_WTA
         prefix   = "atp"       if tour == "ATP" else "wta"
 
-        years_to_fetch = years if force else [
-            y for y in years if counts.get((tour, y), 0) == 0
-        ]
+        if force:
+            years_stable = []
+            years_live   = list(years)
+        else:
+            years_stable = [
+                y for y in years
+                if y not in live_years and counts.get((tour, y), 0) == 0
+            ]
+            years_live = [y for y in years if y in live_years]
+
+        years_to_fetch = years_stable + years_live
+        if not years_to_fetch:
+            logger.info(f"JeffSackmann {tour}: años estables ya en DB, actualizando años vivos...")
+            years_to_fetch = years_live  # siempre re-sincronizar años vivos
 
         if not years_to_fetch:
-            logger.info(f"JeffSackmann {tour}: todos los años ya en DB — sin cambios")
+            logger.info(f"JeffSackmann {tour}: sin años que sincronizar")
             totals[tour] = 0
             continue
 
-        logger.info(f"Backfill JeffSackmann {tour} {years_to_fetch}...")
-        df = _download_matches(base_url, prefix, years_to_fetch)
+        total_new = 0
 
-        if df.empty:
-            logger.warning(f"  JeffSackmann {tour}: sin datos descargados")
-            totals[tour] = 0
-            continue
+        # Años estables: INSERT OR IGNORE
+        if years_stable:
+            logger.info(f"Backfill JeffSackmann {tour} estables {years_stable}...")
+            df_stable = _download_matches(base_url, prefix, years_stable)
+            if not df_stable.empty:
+                n = upsert_matches(df_stable, source="jeffsackmann", tour=tour, replace=False)
+                logger.info(f"  {tour} estables: {len(df_stable)} partidos → {n} nuevos")
+                total_new += n
 
-        new_rows = upsert_matches(df, source="jeffsackmann", tour=tour)
-        logger.info(f"  JeffSackmann {tour}: {len(df)} partidos → {new_rows} nuevos en DB")
-        totals[tour] = new_rows
+        # Años vivos: INSERT OR REPLACE (siempre, aunque ya existan filas)
+        if years_live:
+            logger.info(f"Sincronizando JeffSackmann {tour} vivos {years_live} (reemplaza filas existentes)...")
+            df_live = _download_matches(base_url, prefix, years_live)
+            if not df_live.empty:
+                n = upsert_matches(df_live, source="jeffsackmann", tour=tour, replace=True)
+                logger.info(f"  {tour} vivos: {len(df_live)} partidos → {n} insertados/actualizados")
+                total_new += n
+
+        totals[tour] = total_new
 
         # Invalida caché de disco para que main.py lea de DB en el próximo run
         cache.invalidate(f"{'atp' if tour == 'ATP' else 'wta'}_matches_{min(years)}_{max(years)}")
