@@ -274,8 +274,8 @@ def run(years: list[int] = None, force: bool = False, sofascore: bool = True):
 
     # Primera ejecución: poblar datos históricos JeffSackmann automáticamente
     if not has_source_data("jeffsackmann"):
-        logger.info("Primera ejecución detectada — backfill JeffSackmann 2022-2025...")
-        sync_jeffsackmann(years=[2022, 2023, 2024, 2025], tours=["ATP", "WTA"])
+        logger.info("Primera ejecución detectada — backfill JeffSackmann 2022-2026...")
+        sync_jeffsackmann(years=[2022, 2023, 2024, 2025, 2026], tours=["ATP", "WTA"])
 
     logger.info(f"=== Sync — años: {years} {'(force)' if force else ''} ===")
     totals      = sync_tml(years, force=force)
