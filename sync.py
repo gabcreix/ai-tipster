@@ -1,14 +1,18 @@
 """
-Sincroniza partidos de TML-Database (ATP 2025/2026) a la BD local.
+Sincroniza partidos de múltiples fuentes a la BD local.
 
-Fuentes TML-Database:
-  - {year}.csv          → partidos del año completo (se actualiza al cerrar torneos)
-  - ongoing_tourneys.csv → torneos en curso (se actualiza más frecuentemente)
+Fuentes:
+  - JeffSackmann (GitHub)    → ATP 2018-2024, WTA 2018-2026, ATP 2026 (reemplaza TML)
+  - TML-Database (GitHub)    → ATP 2025 (actualizado hasta Dec 2025)
+  - TML ongoing_tourneys.csv → torneos ATP en curso
+  - tennis-data.co.uk        → ATP/WTA desde 2000, con cuotas, actualización semanal
 
 Uso:
-  python sync.py                  # sincroniza 2025 + año actual + ongoing
-  python sync.py --years 2025     # sólo 2025
-  python sync.py --years 2025 2026 --force  # fuerza re-descarga aunque haya caché
+  python sync.py                  # sincroniza todo (TML + JeffSackmann vivos + TDK)
+  python sync.py --years 2025     # sólo TML 2025
+  python sync.py --tdk            # solo tennis-data.co.uk
+  python sync.py --tdk --tdk-years 2024 2025 2026  # TDK años específicos
+  python sync.py --force          # re-descarga aunque haya caché
 
 El script es idempotente: usa INSERT OR IGNORE, por lo que relanzarlo
 no genera duplicados. Ideal para cron diario o llamada desde scheduler.py.
@@ -98,6 +102,49 @@ def sync_tml(years: list[int], force: bool = False) -> dict[int, int]:
         result[year] = new_rows
 
     return result
+
+
+def sync_tdk(years: list[int] = None, tours: list[str] = None, force: bool = False) -> dict:
+    """
+    Descarga resultados de tennis-data.co.uk y los persiste en match_history.
+
+    Ventaja sobre JeffSackmann: actualización semanal (días tras cada torneo).
+    Limitación: sin estadísticas de servicio — solo válido para H2H y forma.
+
+    Devuelve {(tour, year): new_rows}.
+    """
+    from src.data.tennis_data_co_uk import fetch_year
+
+    if years is None:
+        years = sorted({CURRENT_YEAR - 1, CURRENT_YEAR})
+    if tours is None:
+        tours = ["ATP", "WTA"]
+
+    totals = {}
+    for year in years:
+        cache_key = f"tdk_{year}_{'_'.join(tours)}"
+        if force:
+            cache.invalidate(cache_key)
+
+        logger.info(f"Sincronizando tennis-data.co.uk {year} ({', '.join(tours)})…")
+        try:
+            results = fetch_year(year, tours=tours)
+        except Exception as e:
+            logger.error(f"  TDK {year}: error inesperado — {e}")
+            continue
+
+        for tour in tours:
+            df = results.get(tour, pd.DataFrame())
+            if df.empty:
+                logger.info(f"  TDK {tour} {year}: sin datos")
+                totals[(tour, year)] = 0
+                continue
+
+            n = upsert_matches(df, source="tdk", tour=tour)
+            logger.info(f"  TDK {tour} {year}: {len(df)} partidos → {n} nuevos en DB")
+            totals[(tour, year)] = n
+
+    return totals
 
 
 def print_summary():
@@ -266,7 +313,13 @@ def sync_sofascore(days_back: int = 2, force: bool = False) -> int:
     return new_rows
 
 
-def run(years: list[int] = None, force: bool = False, sofascore: bool = True):
+def run(
+    years: list[int] = None,
+    force: bool = False,
+    sofascore: bool = True,
+    tdk: bool = True,
+    tdk_years: list[int] = None,
+):
     if years is None:
         years = DEFAULT_YEARS
 
@@ -282,20 +335,28 @@ def run(years: list[int] = None, force: bool = False, sofascore: bool = True):
     ongoing_new = sync_ongoing(force=force)
     sf_new      = sync_sofascore(days_back=2, force=force) if sofascore else 0
 
-    # Años vivos JeffSackmann: ATP 2026 (TML-Database abandonado en Jan 2026)
-    # y WTA 2025-2026 (fuente principal WTA). INSERT OR REPLACE — siempre actualiza.
+    # Años vivos JeffSackmann: ATP 2026 (TML abandonado en Jan 2026), WTA 2025-2026
     js_atp = sync_jeffsackmann(years=[2026],       tours=["ATP"], force=force)
     js_wta = sync_jeffsackmann(years=[2025, 2026], tours=["WTA"], force=force)
     js_new = sum(js_atp.values()) + sum(js_wta.values())
 
-    total_new = sum(totals.values()) + ongoing_new + sf_new + js_new
+    # tennis-data.co.uk: resultados semanales ATP+WTA con cuotas
+    tdk_new = 0
+    if tdk:
+        tdk_years_resolved = tdk_years or sorted({CURRENT_YEAR - 1, CURRENT_YEAR})
+        tdk_counts = sync_tdk(years=tdk_years_resolved, force=force)
+        tdk_new = sum(tdk_counts.values())
+
+    total_new = sum(totals.values()) + ongoing_new + sf_new + js_new + tdk_new
     logger.info(f"\n  Total nuevos partidos insertados: {total_new}")
     print_summary()
     return totals
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Sincroniza TML-Database + Sofascore → DB local")
+    parser = argparse.ArgumentParser(
+        description="Sincroniza TML-Database + JeffSackmann + TDK → DB local"
+    )
     parser.add_argument(
         "--years", nargs="+", type=int,
         default=DEFAULT_YEARS,
@@ -308,6 +369,19 @@ if __name__ == "__main__":
     parser.add_argument(
         "--no-sofascore", action="store_true",
         help="Omitir la sincronización de Sofascore",
+    )
+    parser.add_argument(
+        "--no-tdk", action="store_true",
+        help="Omitir la sincronización de tennis-data.co.uk",
+    )
+    parser.add_argument(
+        "--tdk", action="store_true",
+        help="Ejecutar SOLO la sincronización de tennis-data.co.uk (sin el resto)",
+    )
+    parser.add_argument(
+        "--tdk-years", nargs="+", type=int,
+        metavar="YEAR",
+        help="Años a sincronizar de tennis-data.co.uk (defecto: año actual y anterior)",
     )
     parser.add_argument(
         "--backfill",
@@ -329,11 +403,24 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    if args.backfill is not None:
+    if args.tdk:
+        # Modo TDK solo
+        init_db()
+        tdk_years = args.tdk_years or sorted({CURRENT_YEAR - 1, CURRENT_YEAR})
+        logger.info(f"=== Sync tennis-data.co.uk — años: {tdk_years} ===")
+        sync_tdk(years=tdk_years, force=args.force)
+        print_summary()
+    elif args.backfill is not None:
         init_db()
         bf_years = args.backfill if args.backfill else [2022, 2023, 2024]
         logger.info(f"=== Backfill JeffSackmann — años: {bf_years} | tours: {args.tours} ===")
         sync_jeffsackmann(years=bf_years, tours=args.tours, force=args.force)
         print_summary()
     else:
-        run(years=args.years, force=args.force, sofascore=not args.no_sofascore)
+        run(
+            years=args.years,
+            force=args.force,
+            sofascore=not args.no_sofascore,
+            tdk=not args.no_tdk,
+            tdk_years=args.tdk_years,
+        )

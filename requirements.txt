@@ -6,4 +6,7 @@ python-dotenv==1.0.1
 python-telegram-bot==21.10
 schedule==1.2.2
 loguru==0.7.3
-pytest==8.3.5cloudscraper==1.2.71
+pytest==8.3.5
+cloudscraper==1.2.71
+openpyxl>=3.1.0
+xlrd>=2.0.1
