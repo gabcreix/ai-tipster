@@ -14,7 +14,8 @@ BASE_URL = BASE_URL_ATP  # compatibilidad
 # TML-Database: ATP 2025-2026 (actualizado diariamente)
 BASE_URL_TML = "https://raw.githubusercontent.com/Tennismylife/TML-Database/master"
 
-YEARS = [2018, 2019, 2020, 2021, 2022, 2023, 2024]  # 2025+ para ATP se descarga de TML-Database
+YEARS     = [2018, 2019, 2020, 2021, 2022, 2023, 2024]       # ATP: 2025+ vía TML-Database
+WTA_YEARS = [2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]  # WTA: JeffSackmann tiene 2025
 
 SURFACE_MAP = {
     "Hard": "hard",
@@ -188,7 +189,7 @@ def download_tml_atp(years: list = None) -> pd.DataFrame:
     return df
 
 
-def download_wta_matches(years: list = YEARS) -> pd.DataFrame:
+def download_wta_matches(years: list = WTA_YEARS) -> pd.DataFrame:
     key = f"wta_matches_{years[0]}_{years[-1]}"
     cached = cache.load(key)
     if cached is not None:

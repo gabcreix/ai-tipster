@@ -274,16 +274,15 @@ def run(years: list[int] = None, force: bool = False, sofascore: bool = True):
 
     # Primera ejecución: poblar datos históricos JeffSackmann automáticamente
     if not has_source_data("jeffsackmann"):
-        logger.info("Primera ejecución detectada — backfill JeffSackmann 2022-2024...")
-        sync_jeffsackmann(years=[2022, 2023, 2024], tours=["ATP", "WTA"])
+        logger.info("Primera ejecución detectada — backfill JeffSackmann 2022-2025...")
+        sync_jeffsackmann(years=[2022, 2023, 2024, 2025], tours=["ATP", "WTA"])
 
     logger.info(f"=== Sync — años: {years} {'(force)' if force else ''} ===")
     totals      = sync_tml(years, force=force)
     ongoing_new = sync_ongoing(force=force)
-    at_new      = sync_api_tennis(days_back=7)
     sf_new      = sync_sofascore(days_back=2, force=force) if sofascore else 0
 
-    total_new = sum(totals.values()) + ongoing_new + at_new + sf_new
+    total_new = sum(totals.values()) + ongoing_new + sf_new
     logger.info(f"\n  Total nuevos partidos insertados: {total_new}")
     print_summary()
     return totals
