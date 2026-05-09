@@ -14,6 +14,7 @@ Normalización de serve stats:
   El umbral mínimo de 500 puntos en calculate_player_stats() equivale
   a >= 5 partidos Sofascore por superficie.
 """
+import ssl
 import time
 from datetime import datetime, timedelta, timezone
 from loguru import logger
@@ -22,22 +23,37 @@ import pandas as pd
 import requests
 import urllib3
 
-# Suprimir warnings de SSL cuando verify=False (proxy con SSL inspection)
+# Suprimir warnings de SSL cuando verify=False
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+# truststore: usa el almacén de certificados del SO (Windows/macOS/Linux)
+# en lugar del bundle de certifi. Necesario cuando el certificado de Sofascore
+# tiene una CA intermedia que está en el SO pero no en certifi.
+# Debe ejecutarse ANTES de que cloudscraper cree sus sesiones SSL.
+try:
+    import truststore
+    truststore.inject_into_ssl()
+    logger.debug("Sofascore: truststore activo (usando cert store del SO)")
+except ImportError:
+    pass
 
 # cloudscraper gestiona automáticamente el challenge de Cloudflare.
 # Dos sesiones:
-#   _scraper          → verify=True  (redes sin intercepción SSL)
-#   _scraper_noverify → verify=False (redes con SSL inspection — antivirus, proxy)
-#                       Usar session.verify=False en vez de reemplazar el adaptador
-#                       preserva el TLS fingerprinting de cloudscraper.
+#   _scraper          → verify=True  (funciona si truststore resuelve el cert)
+#   _scraper_noverify → verify desactivado (último recurso)
 try:
     import cloudscraper as _cloudscraper_mod
     _browser_cfg = {"browser": "chrome", "platform": "windows", "mobile": False}
     _scraper = _cloudscraper_mod.create_scraper(browser=_browser_cfg)
-    _scraper_noverify = _cloudscraper_mod.create_scraper(browser=_browser_cfg)
-    _scraper_noverify.verify = False
+
+    # Noverify: SSL context propio con check_hostname desactivado primero
+    _noverify_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    _noverify_ctx.check_hostname = False
+    _noverify_ctx.verify_mode    = ssl.CERT_NONE
+    _scraper_noverify = _cloudscraper_mod.create_scraper(
+        browser=_browser_cfg,
+        ssl_context=_noverify_ctx,
+    )
     logger.debug("Sofascore: usando cloudscraper (Cloudflare bypass)")
 except ImportError:
     _scraper = None
