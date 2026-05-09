@@ -15,7 +15,7 @@ Métricas:
   - Comparación vs baseline (solo ranking Bradley-Terry)
 
 Uso:
-  python backtest.py                           # ATP+WTA, test 2024, train 2022-2023
+  python backtest.py                           # ATP+WTA, test 2024, train 2018-2023
   python backtest.py --test-year 2023          # test 2023, train 2022
   python backtest.py --surface Clay            # solo tierra batida
   python backtest.py --tour ATP                # solo ATP
@@ -267,9 +267,9 @@ if __name__ == "__main__":
         help="Año de evaluación (default: 2024)",
     )
     parser.add_argument(
-        "--train", nargs="+", type=int, default=[2022, 2023],
+        "--train", nargs="+", type=int, default=[2018, 2019, 2020, 2021, 2022, 2023],
         metavar="YEAR",
-        help="Años de entrenamiento (default: 2022 2023)",
+        help="Años de entrenamiento (default: 2018-2023)",
     )
     parser.add_argument(
         "--surface", choices=["Clay", "Hard", "Grass"],

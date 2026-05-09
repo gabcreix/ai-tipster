@@ -24,7 +24,7 @@ from loguru import logger
 
 
 from src.data.database import (
-    init_db, upsert_matches, get_match_history_counts,
+    init_db, upsert_matches, get_match_history_counts, has_source_data,
 )
 from src.data.tennis_data import _download_tml, BASE_URL_TML
 from src.data import cache
@@ -160,7 +160,6 @@ def sync_jeffsackmann(
     Tras ejecutar esto una vez, main.py leerá de DB en vez de HTTP.
     Añadir años anteriores:  python sync.py --backfill 2018 2019 2020 2021
     """
-    import datetime
     from src.data.tennis_data import _download_matches, BASE_URL_ATP, BASE_URL_WTA
     from src.data.database import get_match_history_counts
 
@@ -169,8 +168,7 @@ def sync_jeffsackmann(
     if tours is None:
         tours = ["ATP", "WTA"]
 
-    current_year = datetime.date.today().year
-    live_years   = {current_year, current_year - 1}
+    live_years = {CURRENT_YEAR, CURRENT_YEAR - 1}
 
     counts = {
         (r["tour"], r["year"]): r["matches"]
@@ -193,12 +191,7 @@ def sync_jeffsackmann(
             ]
             years_live = [y for y in years if y in live_years]
 
-        years_to_fetch = years_stable + years_live
-        if not years_to_fetch:
-            logger.info(f"JeffSackmann {tour}: años estables ya en DB, actualizando años vivos...")
-            years_to_fetch = years_live  # siempre re-sincronizar años vivos
-
-        if not years_to_fetch:
+        if not years_stable and not years_live:
             logger.info(f"JeffSackmann {tour}: sin años que sincronizar")
             totals[tour] = 0
             continue
@@ -278,6 +271,11 @@ def run(years: list[int] = None, force: bool = False, sofascore: bool = True):
         years = DEFAULT_YEARS
 
     init_db()
+
+    # Primera ejecución: poblar datos históricos JeffSackmann automáticamente
+    if not has_source_data("jeffsackmann"):
+        logger.info("Primera ejecución detectada — backfill JeffSackmann 2022-2024...")
+        sync_jeffsackmann(years=[2022, 2023, 2024], tours=["ATP", "WTA"])
 
     logger.info(f"=== Sync — años: {years} {'(force)' if force else ''} ===")
     totals      = sync_tml(years, force=force)

@@ -158,16 +158,17 @@ def mark_match_winner(match_id: int, winner: str):
         )
 
 
-def get_pending_picks() -> list:
-    """Picks sin resultado para introducir manualmente."""
+def get_pending_picks(placed_only: bool = True) -> list:
+    """Picks sin resultado. Por defecto solo picks apostados (placed=1)."""
+    placed_filter = "AND p.placed = 1" if placed_only else ""
     with get_connection() as conn:
-        return conn.execute("""
+        return conn.execute(f"""
             SELECT p.id, m.player1, m.player2, m.tournament, m.surface, m.tour,
                    p.outcome, p.bookmaker, p.odds, p.our_prob, p.ev, p.stake_eur,
                    p.placed, p.created_at
             FROM picks p
             JOIN matches m ON p.match_id = m.id
-            WHERE p.result IS NULL
+            WHERE p.result IS NULL {placed_filter}
             ORDER BY p.created_at DESC
         """).fetchall()
 
@@ -314,28 +315,30 @@ def upsert_matches(df, source: str, tour: str = "ATP", replace: bool = False) ->
 
     present  = {k: v for k, v in cols.items() if k in df.columns}
     conflict = "REPLACE" if replace else "IGNORE"
-    inserted = 0
+
+    rows = []
+    for _, row in df.iterrows():
+        values = {db_col: row.get(src_col) for src_col, db_col in present.items()}
+        values = {k: (None if (isinstance(v, float) and pd.isna(v)) else v)
+                  for k, v in values.items()}
+        values["source"] = source
+        values["tour"]   = tour
+        rows.append(values)
+
+    if not rows:
+        return 0
+
+    col_names    = ", ".join(rows[0].keys())
+    placeholders = ", ".join(f":{k}" for k in rows[0])
+    sql          = f"INSERT OR {conflict} INTO match_history ({col_names}) VALUES ({placeholders})"
 
     with get_connection() as conn:
-        for _, row in df.iterrows():
-            values = {db_col: row.get(src_col) for src_col, db_col in present.items()}
-            values = {k: (None if (isinstance(v, float) and pd.isna(v)) else v)
-                      for k, v in values.items()}
-            values["source"] = source
-            values["tour"]   = tour
-
-            placeholders = ", ".join(f":{k}" for k in values)
-            col_names     = ", ".join(values.keys())
-            try:
-                conn.execute(
-                    f"INSERT OR {conflict} INTO match_history ({col_names}) VALUES ({placeholders})",
-                    values,
-                )
-                inserted += conn.execute("SELECT changes()").fetchone()[0]
-            except Exception as e:
-                logger.warning(f"upsert_matches: fila ignorada — {e}")
-
-    return inserted
+        before = conn.total_changes
+        try:
+            conn.executemany(sql, rows)
+        except Exception as e:
+            logger.warning(f"upsert_matches: error en batch — {e}")
+        return conn.total_changes - before
 
 
 def load_matches_from_db(years: list = None, tour: str = "ATP"):
@@ -385,10 +388,11 @@ def get_match_history_counts() -> list:
         """).fetchall()
 
 
-def get_roi_summary() -> list:
-    """ROI acumulado agrupado por tour y superficie."""
+def get_roi_summary(placed_only: bool = True) -> list:
+    """ROI acumulado agrupado por tour y superficie. Por defecto solo picks apostados."""
+    placed_filter = "AND p.placed = 1" if placed_only else ""
     with get_connection() as conn:
-        return conn.execute("""
+        return conn.execute(f"""
             SELECT
                 m.tour,
                 m.surface,
@@ -403,7 +407,15 @@ def get_roi_summary() -> list:
                 )                                                      AS roi_pct
             FROM picks p
             JOIN matches m ON p.match_id = m.id
-            WHERE p.result IS NOT NULL
+            WHERE p.result IS NOT NULL {placed_filter}
             GROUP BY m.tour, m.surface
             ORDER BY roi_pct DESC
         """).fetchall()
+
+
+def has_source_data(source: str) -> bool:
+    """Devuelve True si match_history tiene alguna fila para el source indicado."""
+    with get_connection() as conn:
+        return conn.execute(
+            "SELECT 1 FROM match_history WHERE source = ? LIMIT 1", [source]
+        ).fetchone() is not None

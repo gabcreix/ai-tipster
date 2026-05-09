@@ -137,17 +137,18 @@ def _weighted_blend(
     return w_serve * prob_serve + w_form * prob_form + w_rank * prob_rank + w_h2h * prob_h2h
 
 
+def _discounted_odd(odd: float) -> float:
+    return odd * (1 - ODD_DISCOUNT)
+
+
 def calculate_ev(prob: float, odd: float) -> float:
     """EV calculado con cuota descontada un ODD_DISCOUNT para cubrir movimiento de línea."""
-    discounted = odd * (1 - ODD_DISCOUNT)
-    return round((prob * discounted) - 1, 4)
+    return round((prob * _discounted_odd(odd)) - 1, 4)
 
 
 def kelly_stake(prob: float, odd: float, bankroll: float) -> float:
-    """Kelly sobre cuota descontada, igual que calculate_ev."""
-    discounted = odd * (1 - ODD_DISCOUNT)
     q = 1 - prob
-    b = discounted - 1
+    b = _discounted_odd(odd) - 1
     if b <= 0:
         return 0
     kelly = (b * prob - q) / b
@@ -226,8 +227,6 @@ def analyze_tennis_match(
     prob_serve = prob_win_match(serve_p1, serve_p2)
     prob_rank  = prob_win_by_ranking(pts_p1, pts_p2)
 
-    # Blend: redistribuir peso de factores sin datos propios al ranking
-    # (evita que los defaults 0.5 diluyan señales extremas de ranking)
     prob_p1 = round(
         _weighted_blend(
             prob_serve, prob_form, prob_rank, prob_h2h,
@@ -272,9 +271,8 @@ def analyze_tennis_match(
                     )
                     continue
 
-                eff_odd = round(odd * (1 - ODD_DISCOUNT), 3)
                 logger.info(
-                    f"  {name} | Odd: {odd} (efectiva {eff_odd}) | "
+                    f"  {name} | Odd: {odd} (efectiva {round(_discounted_odd(odd), 3)}) | "
                     f"Nuestra prob: {prob:.2%} | "
                     f"Mercado implica: {market_prob:.2%} | "
                     f"EV: {ev:+.2%}"
