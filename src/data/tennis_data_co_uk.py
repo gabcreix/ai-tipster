@@ -48,6 +48,73 @@ _COL_MAP = {
     "Tournament": "tourney_name",
 }
 
+# ---------------------------------------------------------------------------
+# Nombre expansion: "Sinner J." → "Jannik Sinner"
+# ---------------------------------------------------------------------------
+
+_name_lookup: dict | None = None  # {(surname_lower, initial_lower): full_name}
+
+
+def _build_name_lookup() -> dict:
+    """
+    Construye {('surname', 'x'): 'First Surname'} desde los nombres de
+    JeffSackmann en match_history. Usado para expandir nombres abreviados
+    de TDK ('Sinner J.') al formato completo ('Jannik Sinner').
+    Si dos jugadores comparten apellido e inicial, la entrada se marca
+    como ambigua (None) y se mantiene el nombre original.
+    """
+    global _name_lookup
+    if _name_lookup is not None:
+        return _name_lookup
+    try:
+        from src.data.database import get_connection
+        with get_connection() as conn:
+            rows = conn.execute("""
+                SELECT DISTINCT winner_name FROM match_history
+                WHERE source = 'jeffsackmann' AND winner_name IS NOT NULL
+                UNION
+                SELECT DISTINCT loser_name FROM match_history
+                WHERE source = 'jeffsackmann' AND loser_name IS NOT NULL
+            """).fetchall()
+
+        lookup: dict = {}
+        for (full_name,) in rows:
+            full_name = full_name.strip()
+            parts = full_name.split()
+            if len(parts) < 2:
+                continue
+            first   = parts[0]
+            surname = " ".join(parts[1:])
+            key     = (surname.lower(), first[0].lower())
+            lookup[key] = None if key in lookup else full_name
+
+        _name_lookup = {k: v for k, v in lookup.items() if v is not None}
+        logger.debug(f"TDK: lookup de nombres construido ({len(_name_lookup)} entradas)")
+    except Exception as e:
+        logger.debug(f"TDK: no se pudo construir lookup de nombres — {e}")
+        _name_lookup = {}
+    return _name_lookup
+
+
+def _expand_name(tdk_name: str, lookup: dict) -> str:
+    """
+    Expande nombre abreviado TDK al formato completo de JeffSackmann.
+    'Sinner J.' → 'Jannik Sinner'   'De Minaur A.' → 'Alex De Minaur'
+    Si no hay match inequívoco, devuelve el nombre original sin cambios.
+    """
+    if not tdk_name or not lookup:
+        return tdk_name
+    s = tdk_name.strip().rstrip(".")
+    parts = s.split()
+    if len(parts) < 2:
+        return tdk_name
+    initial = parts[-1].rstrip(".").lower()
+    if len(initial) != 1:
+        return tdk_name  # no parece una inicial
+    surname = " ".join(parts[:-1])
+    full = lookup.get((surname.lower(), initial))
+    return full if full else tdk_name
+
 
 # ---------------------------------------------------------------------------
 # HTTP helpers
@@ -165,6 +232,12 @@ def _normalize(df_raw: pd.DataFrame, tour: str, year: int) -> pd.DataFrame:
     df = df.dropna(subset=["winner_name", "loser_name"])
     df = df[df["winner_name"].astype(str).str.strip() != ""]
     df = df[df["loser_name"].astype(str).str.strip() != ""]
+
+    # Expandir nombres abreviados TDK → formato completo JeffSackmann
+    lookup = _build_name_lookup()
+    if lookup:
+        df["winner_name"] = df["winner_name"].apply(lambda n: _expand_name(str(n), lookup))
+        df["loser_name"]  = df["loser_name"].apply(lambda n: _expand_name(str(n), lookup))
 
     # Identificadores sintéticos
     round_col = "Round" if "Round" in df.columns else None

@@ -12,13 +12,52 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
+_SURFACE_CANONICAL = {
+    "hard":         "Hard",
+    "clay":         "Clay",
+    "grass":        "Grass",
+    "carpet":       "Carpet",
+    "clay (indoor)": "Clay",
+    "hard (indoor)": "Hard",
+    "indoor hard":   "Hard",
+    "indoor clay":   "Clay",
+}
+
+
+def normalize_surface(s: str | None) -> str | None:
+    """Canonicaliza valores de superficie al formato de JeffSackmann (Hard/Clay/Grass/Carpet)."""
+    if not s:
+        return s
+    return _SURFACE_CANONICAL.get(str(s).strip().lower(), str(s).strip())
+
+
 def _migrate_db():
     """Aplica migraciones de esquema incremental a tablas existentes."""
     with get_connection() as conn:
+        # Columna placed en picks
         existing = {row[1] for row in conn.execute("PRAGMA table_info(picks)").fetchall()}
         if "placed" not in existing:
             conn.execute("ALTER TABLE picks ADD COLUMN placed INTEGER NOT NULL DEFAULT 0")
             logger.info("Migración: columna 'placed' añadida a picks")
+
+        # Normalizar superficies existentes en match_history
+        n = conn.execute(
+            "UPDATE match_history SET surface = 'Clay' WHERE surface = 'clay'"
+        ).rowcount
+        if n:
+            logger.info(f"Migración: {n} superficies 'clay' → 'Clay' corregidas")
+        n = conn.execute(
+            "UPDATE match_history SET surface = 'Clay' "
+            "WHERE surface LIKE 'Clay (%' OR surface LIKE 'Indoor Clay%'"
+        ).rowcount
+        if n:
+            logger.info(f"Migración: {n} superficies 'Clay (indoor)' → 'Clay' corregidas")
+        n = conn.execute(
+            "UPDATE match_history SET surface = 'Hard' "
+            "WHERE surface LIKE 'Hard (%' OR surface LIKE 'Indoor Hard%'"
+        ).rowcount
+        if n:
+            logger.info(f"Migración: {n} superficies 'Hard (indoor)' → 'Hard' corregidas")
 
 
 def init_db():
@@ -323,6 +362,8 @@ def upsert_matches(df, source: str, tour: str = "ATP", replace: bool = False) ->
                   for k, v in values.items()}
         values["source"] = source
         values["tour"]   = tour
+        if values.get("surface"):
+            values["surface"] = normalize_surface(values["surface"])
         rows.append(values)
 
     if not rows:
