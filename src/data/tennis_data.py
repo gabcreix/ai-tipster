@@ -361,6 +361,8 @@ def calculate_recent_form(df: pd.DataFrame, surface: str = None, n_matches: int 
         return {}
 
     df = df.copy()
+    # El mismo partido puede venir de múltiples fuentes (TDK + JeffSackmann)
+    df = df.drop_duplicates(subset=["winner_name", "loser_name", "tourney_date"])
     df["tourney_date"] = pd.to_datetime(
         df["tourney_date"].astype(str), format="%Y%m%d", errors="coerce"
     )
@@ -405,6 +407,10 @@ def calculate_h2h(df: pd.DataFrame) -> dict:
         return {}
     if "winner_name" not in df.columns or "loser_name" not in df.columns:
         return {}
+
+    # El mismo partido puede venir de múltiples fuentes (TDK + JeffSackmann)
+    if "tourney_date" in df.columns:
+        df = df.drop_duplicates(subset=["winner_name", "loser_name", "tourney_date"])
 
     from collections import defaultdict
     wins: dict = defaultdict(int)
