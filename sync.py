@@ -130,7 +130,7 @@ def sync_api_tennis(days_back: int = 7) -> int:
     df = client.get_recent_results(days_back=days_back)
 
     if df.empty:
-        logger.info("  api-tennis fixtures: sin partidos nuevos")
+        # El motivo real (suscripción caducada, sin datos) ya se logueó en _get()
         return 0
 
     new_rows = 0

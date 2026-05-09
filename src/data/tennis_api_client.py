@@ -33,7 +33,18 @@ class TennisAPIClient:
             data = r.json()
             if data.get("success") == 1:
                 return data.get("result")
-            logger.warning(f"api-tennis {method}: success=0 — {data}")
+            # cod 1006 = suscripción requerida; evitar spam en logs
+            results = data.get("result") or []
+            if isinstance(results, list) and any(
+                (e.get("cod") if isinstance(e, dict) else None) == 1006
+                for e in results
+            ):
+                logger.warning(
+                    f"api-tennis {method}: suscripción requerida (cod 1006) — "
+                    f"activa tu plan en api-tennis.com"
+                )
+            else:
+                logger.warning(f"api-tennis {method}: success=0 — {data}")
         except Exception as e:
             logger.error(f"api-tennis {method}: {e}")
         return None
