@@ -12,6 +12,15 @@ def get_connection() -> sqlite3.Connection:
     return conn
 
 
+def _migrate_db():
+    """Aplica migraciones de esquema incremental a tablas existentes."""
+    with get_connection() as conn:
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(picks)").fetchall()}
+        if "placed" not in existing:
+            conn.execute("ALTER TABLE picks ADD COLUMN placed INTEGER NOT NULL DEFAULT 0")
+            logger.info("Migración: columna 'placed' añadida a picks")
+
+
 def init_db():
     with get_connection() as conn:
         conn.executescript("""
@@ -45,11 +54,13 @@ def init_db():
                 market_prob  REAL NOT NULL,
                 ev           REAL NOT NULL,
                 stake_eur    REAL NOT NULL,
+                placed       INTEGER NOT NULL DEFAULT 0,
                 result       TEXT,
                 profit_loss  REAL,
                 UNIQUE(match_id, bookmaker, outcome)
             );
         """)
+    _migrate_db()
     init_match_history()
     init_aliases()
     logger.info(f"DB lista: {DB_PATH.resolve()}")
@@ -84,24 +95,32 @@ def save_match(data: dict) -> int:
         return cursor.lastrowid
 
 
-def save_pick(match_id: int, pick: dict) -> bool:
+def save_pick(match_id: int, pick: dict, placed: bool = False) -> bool:
     """Inserta un pick. Devuelve True si es nuevo, False si ya existía."""
     with get_connection() as conn:
         try:
             conn.execute("""
                 INSERT INTO picks
                     (match_id, bookmaker, outcome, odds,
-                     our_prob, market_prob, ev, stake_eur)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     our_prob, market_prob, ev, stake_eur, placed)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 match_id,
                 pick["bookmaker"], pick["outcome"], pick["odd"],
                 pick["our_prob"],  pick["market_prob"],
                 pick["ev"],        pick["stake_eur"],
+                int(placed),
             ))
             return True
         except sqlite3.IntegrityError:
             return False
+
+
+def mark_pick_placed(pick_id: int, placed: bool = True):
+    """Marca un pick como apostado (placed=True) o no (placed=False)."""
+    with get_connection() as conn:
+        conn.execute("UPDATE picks SET placed = ? WHERE id = ?", (int(placed), pick_id))
+        logger.info(f"Pick {pick_id} → placed={placed}")
 
 
 def update_result(pick_id: int, result: str):
@@ -145,7 +164,7 @@ def get_pending_picks() -> list:
         return conn.execute("""
             SELECT p.id, m.player1, m.player2, m.tournament, m.surface, m.tour,
                    p.outcome, p.bookmaker, p.odds, p.our_prob, p.ev, p.stake_eur,
-                   p.created_at
+                   p.placed, p.created_at
             FROM picks p
             JOIN matches m ON p.match_id = m.id
             WHERE p.result IS NULL

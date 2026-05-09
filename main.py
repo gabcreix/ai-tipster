@@ -8,7 +8,7 @@ from src.data.tennis_data import (
     calculate_recent_form, calculate_h2h,
 )
 from src.data.tennis_api_client import TennisAPIClient
-from src.data.database import init_db, save_match, save_pick, get_roi_summary
+from src.data.database import init_db, save_match, save_pick, mark_pick_placed, get_roi_summary
 from src.models.tennis_engine import analyze_tennis_match
 from src.notifications.telegram import send_picks, send_roi_summary
 
