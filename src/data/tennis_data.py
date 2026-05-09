@@ -125,9 +125,9 @@ def _load_jeffsackmann_from_db(years: list, tour: str) -> tuple:
 
 def download_atp_matches(years: list = YEARS, include_recent: bool = True) -> pd.DataFrame:
     """
-    Descarga partidos ATP.
-    - DB local (jeffsackmann) si ya se hizo backfill, si no HTTP JeffSackmann
-    - TML-Database para 2025-2026 (si include_recent=True)
+    Devuelve partidos ATP históricos (YEARS=2018-2024) + recientes (2025-2026).
+    Históricos: DB local (jeffsackmann) → HTTP JeffSackmann.
+    Recientes: DB local (TML 2025 + JeffSackmann 2026) → caché → HTTP TML.
     """
     recent_years = [y for y in [2025, 2026] if y not in years]
     key = f"atp_matches_{years[0]}_{years[-1]}{'_recent' if include_recent and recent_years else ''}"
@@ -161,8 +161,9 @@ def download_atp_matches(years: list = YEARS, include_recent: bool = True) -> pd
 
 def download_tml_atp(years: list = None) -> pd.DataFrame:
     """
-    Devuelve partidos ATP de TML-Database para los años indicados.
-    Prioridad: DB local (match_history) → caché disco → HTTP.
+    Devuelve partidos ATP recientes (2025+) para los años indicados.
+    Prioridad: DB local (match_history, todas las fuentes) → caché disco → HTTP TML-Database.
+    Nota: TML-Database quedó inactivo en Jan 2026; la DB incluye también JeffSackmann 2026.
     """
     if years is None:
         years = [2025, 2026]

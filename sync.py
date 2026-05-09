@@ -282,7 +282,13 @@ def run(years: list[int] = None, force: bool = False, sofascore: bool = True):
     ongoing_new = sync_ongoing(force=force)
     sf_new      = sync_sofascore(days_back=2, force=force) if sofascore else 0
 
-    total_new = sum(totals.values()) + ongoing_new + sf_new
+    # Años vivos JeffSackmann: ATP 2026 (TML-Database abandonado en Jan 2026)
+    # y WTA 2025-2026 (fuente principal WTA). INSERT OR REPLACE — siempre actualiza.
+    js_atp = sync_jeffsackmann(years=[2026],       tours=["ATP"], force=force)
+    js_wta = sync_jeffsackmann(years=[2025, 2026], tours=["WTA"], force=force)
+    js_new = sum(js_atp.values()) + sum(js_wta.values())
+
+    total_new = sum(totals.values()) + ongoing_new + sf_new + js_new
     logger.info(f"\n  Total nuevos partidos insertados: {total_new}")
     print_summary()
     return totals
