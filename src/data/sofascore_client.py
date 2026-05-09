@@ -14,7 +14,6 @@ Normalización de serve stats:
   El umbral mínimo de 500 puntos en calculate_player_stats() equivale
   a >= 5 partidos Sofascore por superficie.
 """
-import ssl
 import time
 from datetime import datetime, timedelta, timezone
 from loguru import logger
@@ -22,45 +21,23 @@ from loguru import logger
 import pandas as pd
 import requests
 import urllib3
-from requests.adapters import HTTPAdapter
-from urllib3.poolmanager import PoolManager
 
-# Entornos corporativos con proxy SSL interceptor — suprimir warnings
+# Suprimir warnings de SSL cuando verify=False (proxy con SSL inspection)
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 
-class _NoVerifyAdapter(HTTPAdapter):
-    """Adaptador que deshabilita verificación SSL (proxy corporativo)."""
-    def init_poolmanager(self, connections, maxsize, block=False, **kwargs):
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ctx.check_hostname = False
-        ctx.verify_mode    = ssl.CERT_NONE
-        self.poolmanager   = PoolManager(
-            num_pools=connections, maxsize=maxsize, block=block, ssl_context=ctx,
-        )
-
-
-def _apply_no_verify(session):
-    session.mount("https://", _NoVerifyAdapter())
-    session.verify = False
-    return session
-
-
 # cloudscraper gestiona automáticamente el challenge de Cloudflare.
-# IMPORTANTE: NO aplicar _apply_no_verify aquí — reemplaza el adaptador HTTPS
-# y destruye el TLS fingerprinting de cloudscraper, que es lo que bypasea Cloudflare.
-# _apply_no_verify se usa solo como fallback en proxies corporativos (ver _get).
+# Dos sesiones:
+#   _scraper          → verify=True  (redes sin intercepción SSL)
+#   _scraper_noverify → verify=False (redes con SSL inspection — antivirus, proxy)
+#                       Usar session.verify=False en vez de reemplazar el adaptador
+#                       preserva el TLS fingerprinting de cloudscraper.
 try:
     import cloudscraper as _cloudscraper_mod
-    _scraper = _cloudscraper_mod.create_scraper(
-        browser={"browser": "chrome", "platform": "windows", "mobile": False}
-    )
-    # Fallback para proxy corporativo con SSL inspection
-    _scraper_noverify = _apply_no_verify(
-        _cloudscraper_mod.create_scraper(
-            browser={"browser": "chrome", "platform": "windows", "mobile": False}
-        )
-    )
+    _browser_cfg = {"browser": "chrome", "platform": "windows", "mobile": False}
+    _scraper = _cloudscraper_mod.create_scraper(browser=_browser_cfg)
+    _scraper_noverify = _cloudscraper_mod.create_scraper(browser=_browser_cfg)
+    _scraper_noverify.verify = False
     logger.debug("Sofascore: usando cloudscraper (Cloudflare bypass)")
 except ImportError:
     _scraper = None
@@ -91,28 +68,6 @@ HEADERS = {
     "sec-fetch-site": "same-site",
 }
 
-# Sesión requests para fallback (recoge cookies al inicializarse)
-_session: requests.Session | None = None
-
-
-def _init_session() -> requests.Session:
-    """
-    Crea una sesión requests visitando la página principal de Sofascore
-    para obtener cookies de sesión (cf_clearance, etc.).
-    """
-    global _session
-    if _session is not None:
-        return _session
-    s = _apply_no_verify(requests.Session())
-    s.headers.update(HEADERS)
-    try:
-        resp = s.get(HOME_URL, timeout=15, allow_redirects=True)
-        logger.debug(f"Sofascore home: HTTP {resp.status_code}, cookies={list(resp.cookies.keys())}")
-    except Exception as e:
-        logger.warning(f"No se pudo inicializar sesión Sofascore: {e}")
-    _session = s
-    return _session
-
 class _SofascoreUnavailable(Exception):
     """Lanzada cuando Sofascore devuelve 403 persistente (proxy corporativo)."""
 
@@ -134,20 +89,21 @@ STATS_DELAY   = 0.25
 def _get(path: str, retries: int = 2) -> dict | None:
     """
     GET con fallback de sesiones:
-      1. cloudscraper limpio       (home network — preserva TLS fingerprint)
-      2. cloudscraper + no-verify  (proxy corporativo con SSL inspection)
-      3. requests + no-verify      (último recurso)
+      1. cloudscraper verify=True   (redes sin intercepción SSL)
+      2. cloudscraper verify=False  (antivirus / proxy con SSL inspection)
     """
-    url = f"{BASE}{path}"
-    candidates = [_scraper, _scraper_noverify] if _scraper else [None]
+    if not _scraper:
+        logger.warning("Sofascore: cloudscraper no disponible — instala con: pip install cloudscraper")
+        raise _SofascoreUnavailable()
 
-    for session in candidates:
-        s = session if session is not None else _init_session()
+    url = f"{BASE}{path}"
+
+    for session in [_scraper, _scraper_noverify]:
         last_status = None
 
         for attempt in range(retries + 1):
             try:
-                r = s.get(url, timeout=15)
+                r = session.get(url, timeout=15)
                 last_status = r.status_code
 
                 if r.status_code == 200:
@@ -168,13 +124,12 @@ def _get(path: str, retries: int = 2) -> dict | None:
                 if attempt < retries:
                     time.sleep(2)
 
-        if last_status == 403:
-            logger.debug(f"Sofascore 403 con sesión actual, probando fallback…")
-            continue  # probar siguiente sesión
+        # Si agotamos reintentos con esta sesión, probar la siguiente
+        logger.debug("Sofascore: probando sesión fallback (verify=False)…")
 
     logger.warning(
-        f"Sofascore {path}: HTTP 403 persistente — "
-        "Cloudflare bloqueó la conexión (proxy corporativo o IP bloqueada). "
+        f"Sofascore {path}: fallo persistente — "
+        "SSL inspection en tu red o IP bloqueada por Cloudflare. "
         "El sync continuará sin datos de Sofascore."
     )
     raise _SofascoreUnavailable()
