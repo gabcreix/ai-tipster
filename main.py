@@ -146,7 +146,7 @@ def run():
 
             new_picks = 0
             for pick in picks:
-                if save_pick(match_id, pick):
+                if save_pick(match_id, pick, placed=True):
                     new_picks += 1
 
             if new_picks:
