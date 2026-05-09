@@ -46,18 +46,26 @@ def _apply_no_verify(session):
     return session
 
 
-# cloudscraper gestiona automáticamente el challenge de Cloudflare
+# cloudscraper gestiona automáticamente el challenge de Cloudflare.
+# IMPORTANTE: NO aplicar _apply_no_verify aquí — reemplaza el adaptador HTTPS
+# y destruye el TLS fingerprinting de cloudscraper, que es lo que bypasea Cloudflare.
+# _apply_no_verify se usa solo como fallback en proxies corporativos (ver _get).
 try:
-    import cloudscraper
-    _scraper = _apply_no_verify(
-        cloudscraper.create_scraper(
+    import cloudscraper as _cloudscraper_mod
+    _scraper = _cloudscraper_mod.create_scraper(
+        browser={"browser": "chrome", "platform": "windows", "mobile": False}
+    )
+    # Fallback para proxy corporativo con SSL inspection
+    _scraper_noverify = _apply_no_verify(
+        _cloudscraper_mod.create_scraper(
             browser={"browser": "chrome", "platform": "windows", "mobile": False}
         )
     )
-    logger.info("Sofascore: usando cloudscraper (Cloudflare bypass)")
+    logger.debug("Sofascore: usando cloudscraper (Cloudflare bypass)")
 except ImportError:
     _scraper = None
-    logger.warning("cloudscraper no instalado — instala con: python -m pip install cloudscraper")
+    _scraper_noverify = None
+    logger.warning("cloudscraper no instalado — instala con: pip install cloudscraper")
 
 BASE     = "https://api.sofascore.com/api/v1"
 HOME_URL = "https://www.sofascore.com"
@@ -124,40 +132,52 @@ STATS_DELAY   = 0.25
 # ── HTTP helper ───────────────────────────────────────────────────────────────
 
 def _get(path: str, retries: int = 2) -> dict | None:
+    """
+    GET con fallback de sesiones:
+      1. cloudscraper limpio       (home network — preserva TLS fingerprint)
+      2. cloudscraper + no-verify  (proxy corporativo con SSL inspection)
+      3. requests + no-verify      (último recurso)
+    """
     url = f"{BASE}{path}"
-    for attempt in range(retries + 1):
-        try:
-            if _scraper is not None:
-                r = _scraper.get(url, timeout=15)
-            else:
-                r = _init_session().get(url, timeout=15)
+    candidates = [_scraper, _scraper_noverify] if _scraper else [None]
 
-            if r.status_code == 200:
-                return r.json()
-            if r.status_code == 429:
-                wait = 5 * (attempt + 1)
-                logger.warning(f"Sofascore rate-limit, esperando {wait}s…")
-                time.sleep(wait)
-                continue
-            if r.status_code == 404:
-                return None
-            if r.status_code == 403:
-                if attempt == 0:
+    for session in candidates:
+        s = session if session is not None else _init_session()
+        last_status = None
+
+        for attempt in range(retries + 1):
+            try:
+                r = s.get(url, timeout=15)
+                last_status = r.status_code
+
+                if r.status_code == 200:
+                    return r.json()
+                if r.status_code == 404:
+                    return None
+                if r.status_code == 429:
+                    time.sleep(5 * (attempt + 1))
+                    continue
+                if r.status_code == 403:
                     time.sleep(3)
                     continue
-                logger.warning(
-                    f"Sofascore {path}: HTTP 403 — Cloudflare bloqueó la conexión. "
-                    "Si estás en una red corporativa con proxy HTTPS, Sofascore no "
-                    "es accesible. El sync continuará sin datos de Sofascore."
-                )
-                raise _SofascoreUnavailable()
-            logger.warning(f"Sofascore {path}: HTTP {r.status_code}")
-            return None
-        except Exception as e:
-            logger.error(f"Sofascore {path}: {e}")
-            if attempt < retries:
-                time.sleep(2)
-    return None
+                logger.warning(f"Sofascore {path}: HTTP {r.status_code}")
+                return None
+
+            except Exception as e:
+                logger.debug(f"Sofascore {path} intento {attempt+1}: {e}")
+                if attempt < retries:
+                    time.sleep(2)
+
+        if last_status == 403:
+            logger.debug(f"Sofascore 403 con sesión actual, probando fallback…")
+            continue  # probar siguiente sesión
+
+    logger.warning(
+        f"Sofascore {path}: HTTP 403 persistente — "
+        "Cloudflare bloqueó la conexión (proxy corporativo o IP bloqueada). "
+        "El sync continuará sin datos de Sofascore."
+    )
+    raise _SofascoreUnavailable()
 
 
 # ── Parsing helpers ───────────────────────────────────────────────────────────
