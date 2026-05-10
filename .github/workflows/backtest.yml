@@ -1,0 +1,75 @@
+name: Backtest Model
+
+on:
+  workflow_dispatch:
+    inputs:
+      test_year:
+        description: 'Año de evaluación'
+        required: true
+        default: '2024'
+        type: string
+      surface:
+        description: 'Superficie (vacío = todas)'
+        required: false
+        default: 'all'
+        type: choice
+        options: [all, Clay, Hard, Grass]
+      tour:
+        description: 'Circuito (vacío = ambos)'
+        required: false
+        default: 'both'
+        type: choice
+        options: [both, ATP, WTA]
+      train_years:
+        description: 'Años de entrenamiento (separados por espacio)'
+        required: false
+        default: '2018 2019 2020 2021 2022 2023'
+        type: string
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      # ── 1. Código fuente ───────────────────────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+
+      # ── 2. Restaurar BD (contiene match_history, evita re-descargar) ──────
+      - name: Restore database
+        run: |
+          mkdir -p data
+          if git fetch origin db-storage --depth=1 2>/dev/null; then
+            git checkout origin/db-storage -- data/tipster.db 2>/dev/null \
+              && echo "DB restaurada desde db-storage" \
+              || echo "Sin tipster.db en db-storage — se descargará de HTTP"
+          else
+            echo "Rama db-storage no encontrada — descarga desde HTTP"
+          fi
+
+      # ── 3. Python ──────────────────────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── 4. Ejecutar backtest ──────────────────────────────────────────────────
+      - name: Run backtest
+        run: |
+          CMD="python backtest.py --test-year ${{ inputs.test_year }}"
+          CMD="$CMD --train ${{ inputs.train_years }}"
+          if [ "${{ inputs.surface }}" != "all" ]; then
+            CMD="$CMD --surface ${{ inputs.surface }}"
+          fi
+          if [ "${{ inputs.tour }}" != "both" ]; then
+            CMD="$CMD --tour ${{ inputs.tour }}"
+          fi
+          echo "Ejecutando: $CMD"
+          eval $CMD
