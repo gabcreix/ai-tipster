@@ -158,4 +158,18 @@ def run():
 
 
 if __name__ == "__main__":
-    run()
+    import argparse
+    parser = argparse.ArgumentParser(description="Marcar resultados de picks")
+    parser.add_argument("--auto", action="store_true", help="Solo marcado automático, sin interacción")
+    args = parser.parse_args()
+
+    if args.auto:
+        from src.data.database import init_db
+        init_db()
+        n = auto_mark_from_history()
+        if n:
+            logger.info(f"Auto-marcado: {n} pick(s) cerrados")
+        else:
+            logger.info("Auto-marcado: sin picks nuevos para cerrar")
+    else:
+        run()

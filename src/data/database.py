@@ -101,6 +101,8 @@ def init_db():
         """)
     init_match_history()
     init_aliases()
+    init_tournament_config()
+    _seed_tournament_config()
     _migrate_db()
     logger.info(f"DB lista: {DB_PATH.resolve()}")
 
@@ -281,6 +283,50 @@ def get_unresolved_names() -> list:
             FROM unresolved_names
             ORDER BY seen_count DESC, first_seen
         """).fetchall()
+
+
+def init_tournament_config():
+    """Crea la tabla tournament_config si no existe."""
+    with get_connection() as conn:
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS tournament_config (
+                sport_key  TEXT PRIMARY KEY,
+                surface    TEXT,
+                tour       TEXT NOT NULL
+            );
+        """)
+
+
+def _seed_tournament_config():
+    """Puebla tournament_config con los torneos de config.py (no sobreescribe superficies ya guardadas)."""
+    from config import TOURNAMENT_SURFACE, TOURNAMENT_TOUR
+    for sport_key, surface in TOURNAMENT_SURFACE.items():
+        tour = TOURNAMENT_TOUR.get(sport_key, "ATP")
+        upsert_tournament_config(sport_key, tour=tour, surface=surface)
+
+
+def get_tournament_config() -> dict:
+    """Devuelve {sport_key: {'surface': ..., 'tour': ...}} para todos los torneos en DB."""
+    with get_connection() as conn:
+        rows = conn.execute(
+            "SELECT sport_key, surface, tour FROM tournament_config"
+        ).fetchall()
+    return {r["sport_key"]: {"surface": r["surface"], "tour": r["tour"]} for r in rows}
+
+
+def upsert_tournament_config(sport_key: str, tour: str, surface: str = None):
+    """
+    Guarda configuración de torneo en DB.
+    No sobreescribe una superficie ya confirmada (surface=None = desconocida).
+    """
+    with get_connection() as conn:
+        conn.execute("""
+            INSERT INTO tournament_config (sport_key, surface, tour)
+            VALUES (?, ?, ?)
+            ON CONFLICT(sport_key) DO UPDATE SET
+                tour    = excluded.tour,
+                surface = COALESCE(tournament_config.surface, excluded.surface)
+        """, [sport_key, surface, tour])
 
 
 def init_match_history():

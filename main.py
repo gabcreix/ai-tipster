@@ -8,7 +8,10 @@ from src.data.tennis_data import (
     calculate_recent_form, calculate_h2h,
 )
 from src.data.tennis_api_client import TennisAPIClient
-from src.data.database import init_db, save_match, save_pick, mark_pick_placed, get_roi_summary
+from src.data.database import (
+    init_db, save_match, save_pick, mark_pick_placed, get_roi_summary,
+    get_tournament_config, upsert_tournament_config,
+)
 from src.models.tennis_engine import analyze_tennis_match
 from src.notifications.telegram import send_picks, send_roi_summary
 
@@ -17,6 +20,7 @@ def run():
     logger.info("=== AI Tipster — Iniciando análisis ===")
 
     init_db()
+    tournament_cfg = get_tournament_config()
 
     logger.info("Descargando datos históricos ATP...")
     atp_df = download_atp_matches()
@@ -79,8 +83,13 @@ def run():
             logger.info(f"Torneos nuevos descubiertos: {new_sports}")
 
     for sport in sports_to_analyze:
-        surface = TOURNAMENT_SURFACE.get(sport, "Hard")
-        tour    = TOURNAMENT_TOUR.get(sport, "WTA" if "wta" in sport.lower() else "ATP")
+        cfg     = tournament_cfg.get(sport, {})
+        surface = cfg.get("surface") or TOURNAMENT_SURFACE.get(sport, "Hard")
+        tour    = cfg.get("tour")    or TOURNAMENT_TOUR.get(sport, "WTA" if "wta" in sport.lower() else "ATP")
+        if sport not in tournament_cfg:
+            upsert_tournament_config(sport, tour=tour, surface=None)
+            tournament_cfg[sport] = {"surface": None, "tour": tour}
+            logger.warning(f"Torneo nuevo: {sport} | tour={tour} superficie=desconocida (usando {surface})")
         stats_df    = (atp_cache    if tour == "ATP" else wta_cache)[surface]
         rankings    = (atp_rankings if tour == "ATP" else wta_rankings)
         recent_form = (atp_form     if tour == "ATP" else wta_form)[surface]
