@@ -20,15 +20,13 @@ jobs:
       TENNIS_API_KEY:     ${{ secrets.TENNIS_API_KEY }}
 
     steps:
-      # ── 1. Código fuente ──────────────────────────────────────────────────
-      # El workflow vive en main (para que el cron se active), pero el código
-      # real está en develop. Hacemos checkout explícito de develop.
+      # ── 1. Código fuente ───────────────────────────────────────────────────────
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           ref: develop
 
-      # ── 2. Restaurar BD desde rama db-storage ────────────────────────────
+      # ── 2. Restaurar BD desde rama db-storage ──────────────────────────────────
       - name: Restore database
         run: |
           mkdir -p data
@@ -40,7 +38,7 @@ jobs:
             echo "Rama db-storage no encontrada — primera ejecución, arrancando en frío"
           fi
 
-      # ── 3. Python ─────────────────────────────────────────────────────────
+      # ── 3. Python ──────────────────────────────────────────────────────────────────
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
@@ -50,17 +48,21 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # ── 4. Sincronizar fuentes de datos ───────────────────────────────────
+      # ── 4. Sincronizar fuentes de datos ───────────────────────────────────────────
       - name: Sync data sources
         # --no-sofascore: Sofascore usa Cloudflare y no es fiable en CI.
         # TDK y JeffSackmann son HTTP/GitHub directos y funcionan bien.
         run: python sync.py --no-sofascore
 
-      # ── 5. Análisis y envío de picks ──────────────────────────────────────
+      # ── 5. Análisis y envío de picks ────────────────────────────────────────────
       - name: Run analysis
         run: python main.py
 
-      # ── 6. Guardar BD actualizada en db-storage ───────────────────────────
+      # ── 6. Marcar resultados de picks anteriores ─────────────────────────────────
+      - name: Auto-mark results
+        run: python results.py --auto
+
+      # ── 7. Guardar BD actualizada en db-storage ─────────────────────────────────
       - name: Save database
         if: always()   # guardar aunque el análisis falle, para no perder el sync
         run: |
