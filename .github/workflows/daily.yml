@@ -1,0 +1,94 @@
+name: Daily Tennis Analysis
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # 06:00 UTC — antes de la sesión europea
+  workflow_dispatch:        # permite lanzarlo manualmente desde Actions tab
+
+permissions:
+  contents: write           # necesario para push a db-storage
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      ODDS_API_KEY:       ${{ secrets.ODDS_API_KEY }}
+      TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      TELEGRAM_CHAT_ID:   ${{ secrets.TELEGRAM_CHAT_ID }}
+      TENNIS_API_KEY:     ${{ secrets.TENNIS_API_KEY }}
+
+    steps:
+      # ── 1. Código fuente ──────────────────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── 2. Restaurar BD desde rama db-storage ────────────────────────────
+      - name: Restore database
+        run: |
+          mkdir -p data
+          if git fetch origin db-storage --depth=1 2>/dev/null; then
+            git checkout origin/db-storage -- data/tipster.db 2>/dev/null \
+              && echo "DB restaurada desde db-storage" \
+              || echo "db-storage existe pero sin tipster.db — arrancando en frío"
+          else
+            echo "Rama db-storage no encontrada — primera ejecución, arrancando en frío"
+          fi
+
+      # ── 3. Python ─────────────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── 4. Sincronizar fuentes de datos ───────────────────────────────────
+      - name: Sync data sources
+        # --no-sofascore: Sofascore usa Cloudflare y no es fiable en CI.
+        # TDK y JeffSackmann son HTTP/GitHub directos y funcionan bien.
+        run: python sync.py --no-sofascore
+
+      # ── 5. Análisis y envío de picks ──────────────────────────────────────
+      - name: Run analysis
+        run: python main.py
+
+      # ── 6. Guardar BD actualizada en db-storage ───────────────────────────
+      - name: Save database
+        if: always()   # guardar aunque el análisis falle, para no perder el sync
+        run: |
+          DB="data/tipster.db"
+          if [ ! -f "$DB" ]; then
+            echo "No hay BD que guardar"
+            exit 0
+          fi
+
+          # Backup antes de cambiar de rama
+          cp "$DB" /tmp/tipster.db
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Crear o actualizar rama db-storage (huérfana si es la primera vez)
+          git fetch origin db-storage 2>/dev/null || true
+          if git show-ref --verify --quiet refs/remotes/origin/db-storage; then
+            git checkout -B db-storage origin/db-storage
+          else
+            git checkout --orphan db-storage
+            git rm -rf . --quiet 2>/dev/null || true
+          fi
+
+          mkdir -p data
+          cp /tmp/tipster.db data/tipster.db
+          git add -f data/tipster.db   # -f porque data/*.db está en .gitignore del main
+
+          if git diff --cached --quiet; then
+            echo "BD sin cambios — nada que commitear"
+          else
+            git commit -m "chore: update DB $(date -u '+%Y-%m-%d %H:%M UTC')"
+            git push origin db-storage
+            echo "BD guardada en db-storage"
+          fi
