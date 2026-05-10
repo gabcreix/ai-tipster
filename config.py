@@ -21,6 +21,8 @@ TOURNAMENT_SURFACE = {
     "tennis_wta_stuttgart_open": "Clay",
     "tennis_atp_madrid_open":    "Clay",
     "tennis_wta_madrid_open":    "Clay",
+    "tennis_atp_italian_open":   "Clay",
+    "tennis_wta_italian_open":   "Clay",
 }
 
 # Circuito por torneo
@@ -30,6 +32,8 @@ TOURNAMENT_TOUR = {
     "tennis_wta_stuttgart_open": "WTA",
     "tennis_atp_madrid_open":    "ATP",
     "tennis_wta_madrid_open":    "WTA",
+    "tennis_atp_italian_open":   "ATP",
+    "tennis_wta_italian_open":   "WTA",
 }
 
 # Bankroll inicial
