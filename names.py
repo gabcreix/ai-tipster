@@ -5,6 +5,8 @@ Mapea nombres de the-odds-api a nombres canónicos de JeffSackmann.
 Uso:
   python names.py                          # revisa nombres sin resolver
   python names.py --list                   # muestra aliases ya guardados
+  python names.py --unresolved             # lista pendientes sin interacción (CI)
+  python names.py --add 'Odds' 'Canónico'  # guarda alias directamente (CI)
   python names.py --edit "Daniel Merida"   # edita un alias existente
 """
 import argparse
@@ -138,6 +140,30 @@ def cmd_edit(odds_name: str):
         print(f"  → '{match}' → '{raw}'")
 
 
+def cmd_unresolved():
+    """Lista nombres sin resolver sin interacción (apto para CI)."""
+    names = get_unresolved_names()
+    if not names:
+        print("✅ No hay nombres sin resolver.")
+        return
+    print(f"\n  {'Nombre Odds API':40s} {'Tour':5s} {'Veces':>6s}")
+    print(f"  {'-'*55}")
+    for r in names:
+        print(f"  {r['odds_name']:40s} {r['tour'] or '?':5s} {r['seen_count']:>6d}x")
+    print(f"\n  Total: {len(names)} nombre(s) sin resolver")
+
+
+def cmd_add(odds_name: str, canonical: str):
+    """Guarda un alias directamente sin interacción (apto para CI)."""
+    canon = None if canonical.strip().lower() in ("none", "nuevo", "") else canonical.strip()
+    save_alias(odds_name.strip(), canonical=canon)
+    invalidate_alias_cache()
+    if canon:
+        print(f"✅ Alias guardado: '{odds_name}' → '{canon}'")
+    else:
+        print(f"✅ '{odds_name}' marcado como jugador nuevo (sin datos históricos)")
+
+
 def cmd_resolve():
     """Revisa nombres sin resolver de forma interactiva."""
     names = get_unresolved_names()
@@ -221,6 +247,14 @@ def run():
         help="Muestra los aliases ya guardados y sale",
     )
     parser.add_argument(
+        "--unresolved", action="store_true",
+        help="Lista nombres sin resolver sin interacción (para CI)",
+    )
+    parser.add_argument(
+        "--add", nargs=2, metavar=("ODDS_NAME", "CANONICAL"),
+        help="Guarda un alias directamente: --add 'Nombre Odds' 'Nombre Canónico'",
+    )
+    parser.add_argument(
         "--edit", metavar="NOMBRE",
         help="Edita el alias de un nombre existente (búsqueda parcial)",
     )
@@ -228,7 +262,11 @@ def run():
 
     init_db()
 
-    if args.list:
+    if args.unresolved:
+        cmd_unresolved()
+    elif args.add:
+        cmd_add(args.add[0], args.add[1])
+    elif args.list:
         cmd_list()
     elif args.edit:
         cmd_edit(args.edit)

@@ -1,0 +1,88 @@
+name: Player Name Aliases
+
+on:
+  workflow_dispatch:
+    inputs:
+      odds_name:
+        description: 'Nombre de la Odds API a resolver (vacío = solo listar pendientes)'
+        required: false
+        default: ''
+        type: string
+      canonical:
+        description: 'Nombre canónico JeffSackmann (vacío o "nuevo" = jugador sin datos)'
+        required: false
+        default: ''
+        type: string
+
+jobs:
+  names:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      # ── 1. Código fuente ───────────────────────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: develop
+
+      # ── 2. Restaurar BD (necesaria para leer/escribir aliases) ────────────────
+      - name: Restore database
+        run: |
+          mkdir -p data
+          if git fetch origin db-storage --depth=1 2>/dev/null; then
+            git checkout origin/db-storage -- data/tipster.db 2>/dev/null \
+              && echo "DB restaurada desde db-storage" \
+              || echo "Sin tipster.db — arrancando en frío"
+          else
+            echo "Rama db-storage no encontrada"
+          fi
+
+      # ── 3. Python ──────────────────────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # ── 4. Listar pendientes o guardar alias ────────────────────────────────
+      - name: Run names
+        run: |
+          if [ -n "${{ inputs.odds_name }}" ]; then
+            python names.py --add "${{ inputs.odds_name }}" "${{ inputs.canonical }}"
+          else
+            python names.py --unresolved
+          fi
+
+      # ── 5. Guardar BD si se añadió un alias ────────────────────────────
+      - name: Save database
+        if: ${{ inputs.odds_name != '' }}
+        run: |
+          DB="data/tipster.db"
+          cp "$DB" /tmp/tipster.db
+
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git fetch origin db-storage 2>/dev/null || true
+          if git show-ref --verify --quiet refs/remotes/origin/db-storage; then
+            git checkout -B db-storage origin/db-storage
+          else
+            git checkout --orphan db-storage
+            git rm -rf . --quiet 2>/dev/null || true
+          fi
+
+          mkdir -p data
+          cp /tmp/tipster.db data/tipster.db
+          git add -f data/tipster.db
+
+          if git diff --cached --quiet; then
+            echo "Sin cambios en la BD"
+          else
+            git commit -m "chore: add player alias '${{ inputs.odds_name }}' → '${{ inputs.canonical }}'"
+            git push origin db-storage
+            echo "Alias guardado en db-storage"
+          fi
