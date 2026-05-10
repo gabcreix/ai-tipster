@@ -99,9 +99,9 @@ def init_db():
                 UNIQUE(match_id, bookmaker, outcome)
             );
         """)
-    _migrate_db()
     init_match_history()
     init_aliases()
+    _migrate_db()
     logger.info(f"DB lista: {DB_PATH.resolve()}")
 
 
