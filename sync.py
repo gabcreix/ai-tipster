@@ -211,7 +211,7 @@ def sync_jeffsackmann(
     from src.data.database import get_match_history_counts
 
     if years is None:
-        years = [2022, 2023, 2024]
+        years = list(range(2022, CURRENT_YEAR - 1))
     if tours is None:
         tours = ["ATP", "WTA"]
 
@@ -327,8 +327,9 @@ def run(
 
     # Primera ejecución: poblar datos históricos JeffSackmann automáticamente
     if not has_source_data("jeffsackmann"):
-        logger.info("Primera ejecución detectada — backfill JeffSackmann 2022-2026...")
-        sync_jeffsackmann(years=[2022, 2023, 2024, 2025, 2026], tours=["ATP", "WTA"])
+        backfill_years = list(range(2022, CURRENT_YEAR + 1))
+        logger.info(f"Primera ejecución detectada — backfill JeffSackmann {backfill_years}...")
+        sync_jeffsackmann(years=backfill_years, tours=["ATP", "WTA"])
 
     logger.info(f"=== Sync — años: {years} {'(force)' if force else ''} ===")
     totals      = sync_tml(years, force=force)
@@ -412,7 +413,7 @@ if __name__ == "__main__":
         print_summary()
     elif args.backfill is not None:
         init_db()
-        bf_years = args.backfill if args.backfill else [2022, 2023, 2024]
+        bf_years = args.backfill if args.backfill else list(range(2022, CURRENT_YEAR - 1))
         logger.info(f"=== Backfill JeffSackmann — años: {bf_years} | tours: {args.tours} ===")
         sync_jeffsackmann(years=bf_years, tours=args.tours, force=args.force)
         print_summary()

@@ -82,7 +82,7 @@ def map_name(odds_name: str, known_players: list, cutoff: float = 0.85, tour: st
     try:
         from src.data.database import log_unresolved
         log_unresolved(odds_name, tour)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"No se pudo registrar nombre sin resolver '{odds_name}': {e}")
     logger.warning(f"Sin coincidencia para: '{odds_name}'")
     return None

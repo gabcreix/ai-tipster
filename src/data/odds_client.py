@@ -41,7 +41,11 @@ def get_odds(sport: str) -> list:
         "oddsFormat": "decimal",
     }
 
-    response = requests.get(url, params=params)
+    try:
+        response = requests.get(url, params=params, timeout=10)
+    except Exception as e:
+        logger.error(f"get_odds timeout/red para {sport}: {e}")
+        return []
 
     if response.status_code != 200:
         logger.error(f"Error API: {response.status_code} — {response.text}")
@@ -50,7 +54,11 @@ def get_odds(sport: str) -> list:
     remaining = response.headers.get("x-requests-remaining", "?")
     logger.info(f"Requests restantes este mes: {remaining}")
 
-    return response.json()
+    try:
+        return response.json()
+    except Exception as e:
+        logger.error(f"get_odds: respuesta JSON inválida para {sport}: {e}")
+        return []
 
 
 if __name__ == "__main__":

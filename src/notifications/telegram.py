@@ -44,7 +44,7 @@ def _format_picks(picks: list) -> str:
                 seen[key] = p
 
         for pick in seen.values():
-            rival = pick["match"].replace(pick["outcome"], "").replace("vs", "").strip(" ")
+            rival = pick["match"].replace(pick["outcome"], "").replace(" vs ", "").strip()
             lines.append(
                 f"\n✅ <b>{pick['outcome']}</b> vs {rival}\n"
                 f"   📌 {pick['bookmaker']} @ <b>{pick['odd']}</b>\n"
