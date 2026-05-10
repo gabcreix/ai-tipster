@@ -10,22 +10,22 @@ from src.data.tennis_data import (
 from src.data.tennis_api_client import TennisAPIClient
 from src.data.database import (
     init_db, save_match, save_pick, mark_pick_placed, get_roi_summary,
-    get_tournament_config, upsert_tournament_config,
+    get_tournament_config, upsert_tournament_config, get_unresolved_names,
 )
 from src.models.tennis_engine import analyze_tennis_match
-from src.notifications.telegram import send_picks, send_roi_summary
+from src.notifications.telegram import send_picks, send_roi_summary, send_unresolved_names_alert
 
 
 def run():
-    logger.info("=== AI Tipster — Iniciando análisis ===")
+    logger.info("=== AI Tipster - Iniciando analisis ===")
 
     init_db()
     tournament_cfg = get_tournament_config()
 
-    logger.info("Descargando datos históricos ATP...")
+    logger.info("Descargando datos historicos ATP...")
     atp_df = download_atp_matches()
 
-    logger.info("Descargando datos históricos WTA...")
+    logger.info("Descargando datos historicos WTA...")
     wta_df = download_wta_matches()
     import pandas as _pd
     try:
@@ -46,30 +46,28 @@ def run():
     atp_cache = {s: calculate_player_stats(atp_df, surface=s) for s in surfaces}
     wta_cache = {s: calculate_player_stats(wta_df, surface=s) for s in surfaces}
 
-    # Rankings: api-tennis.com si hay clave, JeffSackmann como fallback
     api_client: TennisAPIClient | None = None
     if TENNIS_API_KEY:
         api_client = TennisAPIClient(TENNIS_API_KEY)
-        logger.info("api-tennis.com activo — rankings y H2H en tiempo real")
+        logger.info("api-tennis.com activo - rankings y H2H en tiempo real")
         atp_rankings = api_client.get_rankings("ATP")
         wta_rankings = api_client.get_rankings("WTA")
         if not atp_rankings:
-            logger.warning("api-tennis: rankings ATP vacíos, usando JeffSackmann")
+            logger.warning("api-tennis: rankings ATP vacios, usando JeffSackmann")
             atp_rankings = get_current_rankings("atp")
         if not wta_rankings:
-            logger.warning("api-tennis: rankings WTA vacíos, usando JeffSackmann")
+            logger.warning("api-tennis: rankings WTA vacios, usando JeffSackmann")
             wta_rankings = get_current_rankings("wta")
     else:
-        logger.info("TENNIS_API_KEY no configurado — usando datos históricos JeffSackmann")
+        logger.info("TENNIS_API_KEY no configurado - usando datos historicos JeffSackmann")
         atp_rankings = get_current_rankings("atp")
         wta_rankings = get_current_rankings("wta")
 
-    # Forma y H2H históricos (siempre, como base y fallback)
-    logger.info("Calculando forma reciente y H2H históricos ATP...")
+    logger.info("Calculando forma reciente y H2H historicos ATP...")
     atp_form = {s: calculate_recent_form(atp_df, surface=s) for s in surfaces}
     atp_h2h  = calculate_h2h(atp_df)
 
-    logger.info("Calculando forma reciente y H2H históricos WTA...")
+    logger.info("Calculando forma reciente y H2H historicos WTA...")
     wta_form = {s: calculate_recent_form(wta_df, surface=s) for s in surfaces}
     wta_h2h  = calculate_h2h(wta_df)
 
@@ -108,17 +106,14 @@ def run():
             p1 = match["home_team"]
             p2 = match["away_team"]
 
-            # Enriquecer forma y H2H con datos en tiempo real (sin reemplazar datos históricos buenos)
             match_form = recent_form
             match_h2h  = h2h_data
             if api_client:
                 live = api_client.get_match_live_data(p1, p2, tour)
-                # Solo actualizar la forma si api-tennis encontró el jugador
                 if live.get("form_p1_found"):
                     match_form = {**match_form, p1: live["form_p1"]}
                 if live.get("form_p2_found"):
                     match_form = {**match_form, p2: live["form_p2"]}
-                # Solo sobreescribir H2H si hay enfrentamientos directos reales
                 if live["h2h_matches"] > 0:
                     match_h2h = {
                         **match_h2h,
@@ -136,7 +131,6 @@ def run():
             if not picks:
                 continue
 
-            # Guardar partido y picks en la DB
             first = picks[0]
             match_id = save_match({
                 "tournament":    sport,
@@ -163,7 +157,6 @@ def run():
 
             all_picks.extend(picks)
 
-    # Resumen en consola
     if all_picks:
         all_picks.sort(key=lambda x: x["ev"], reverse=True)
         logger.info(f"\n{'='*50}")
@@ -173,17 +166,21 @@ def run():
             logger.info(
                 f"PICK | {pick['outcome']} ({pick['match']}) | "
                 f"{pick['bookmaker']} @ {pick['odd']} | "
-                f"EV: {pick['ev']:+.2%} | Stake: €{pick['stake_eur']}"
+                f"EV: {pick['ev']:+.2%} | Stake: {pick['stake_eur']} EUR"
             )
     else:
         logger.info("\n=== Sin valor detectado en los mercados actuales ===")
 
-    # Enviar por Telegram (picks + ROI si hay historial)
     send_picks(all_picks)
 
     roi = get_roi_summary()
     if roi:
         send_roi_summary(roi)
+
+    unresolved = get_unresolved_names()
+    if unresolved:
+        logger.warning(f"{len(unresolved)} nombre(s) sin resolver - enviando alerta Telegram")
+        send_unresolved_names_alert(unresolved)
 
     return all_picks
 
