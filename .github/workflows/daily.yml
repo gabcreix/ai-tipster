@@ -21,8 +21,12 @@ jobs:
 
     steps:
       # ── 1. Código fuente ──────────────────────────────────────────────────
+      # El workflow vive en main (para que el cron se active), pero el código
+      # real está en develop. Hacemos checkout explícito de develop.
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: develop
 
       # ── 2. Restaurar BD desde rama db-storage ────────────────────────────
       - name: Restore database
