@@ -14,6 +14,9 @@ on:
         default: ''
         type: string
 
+permissions:
+  contents: write           # necesario para push a db-storage
+
 jobs:
   names:
     runs-on: ubuntu-latest
