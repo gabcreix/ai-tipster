@@ -14,19 +14,22 @@ on:
         default: ''
         type: string
 
+permissions:
+  contents: write           # necesario para push a db-storage
+
 jobs:
   names:
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
     steps:
-      # ── 1. Código fuente ───────────────────────────────────────────────────────
+      # ── 1. Código fuente ──────────────────────────────────────────────────
       - name: Checkout code
         uses: actions/checkout@v4
         with:
           ref: develop
 
-      # ── 2. Restaurar BD (necesaria para leer/escribir aliases) ────────────────
+      # ── 2. Restaurar BD (necesaria para leer/escribir aliases) ────────────
       - name: Restore database
         run: |
           mkdir -p data
@@ -38,7 +41,7 @@ jobs:
             echo "Rama db-storage no encontrada"
           fi
 
-      # ── 3. Python ──────────────────────────────────────────────────────────────────
+      # ── 3. Python ─────────────────────────────────────────────────────────
       - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
@@ -48,7 +51,7 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # ── 4. Listar pendientes o guardar alias ────────────────────────────────
+      # ── 4. Listar pendientes o guardar alias ──────────────────────────────
       - name: Run names
         run: |
           if [ -n "${{ inputs.odds_name }}" ]; then
@@ -57,7 +60,7 @@ jobs:
             python names.py --unresolved
           fi
 
-      # ── 5. Guardar BD si se añadió un alias ────────────────────────────
+      # ── 5. Guardar BD si se añadió un alias ──────────────────────────────
       - name: Save database
         if: ${{ inputs.odds_name != '' }}
         run: |
